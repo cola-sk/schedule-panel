@@ -1,0 +1,45 @@
+{
+  "name": "feishu-rotation-reminder",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 9595",
+    "cron:local": "node scripts/local-cron.mjs",
+    "mcp:server": "tsx lib/mcp/http-server.ts",
+    "mcp:stdio": "tsx lib/mcp/stdio-server.ts",
+    "build": "next build",
+    "start": "next start -p 9595",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@radix-ui/react-dialog": "^1.1.14",
+    "@radix-ui/react-slot": "^1.2.3",
+    "cheerio": "^1.2.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.468.0",
+    "next": "^16.3.4",
+    "openai": "^7.15.0",
+    "p-limit": "^7.3.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "tailwind-merge": "^3.3.0",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.7",
+    "@types/node": "^22.15.3",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@types/turndown": "^5.0.6",
+    "eslint": "^9.25.0",
+    "eslint-config-next": "^16.3.4",
+    "tailwindcss": "^4.1.7",
+    "tsx": "^4.23.13",
+    "typescript": "^5.8.3"
+  }
+}

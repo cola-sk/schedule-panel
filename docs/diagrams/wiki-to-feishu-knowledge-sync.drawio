@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="31.1.5">
+  <diagram id="wiki-to-feishu-sync" name="文档归档流程">
+    <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="2" value="平台新入口&#xa;配置来源、模型与发布策略" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="60" y="330" width="180" height="80" as="geometry" /></mxCell>
+        <mxCell id="3" value="Confluence 目录扫描&#xa;递归获取 pageId、标题、版本、层级" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="320" y="100" width="200" height="80" as="geometry" /></mxCell>
+        <mxCell id="4" value="正文提取与清洗&#xa;HTML → Markdown / 纯文本&#xa;附件仅记录链接" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1"><mxGeometry x="320" y="270" width="200" height="90" as="geometry" /></mxCell>
+        <mxCell id="5" value="去重与增量判定&#xa;sourcePageId + version/hash&#xa;跳过未变更文档" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="320" y="450" width="200" height="90" as="geometry" /></mxCell>
+        <mxCell id="6" value="自定义 OpenAI 兼容 LLM&#xa;分类 + 置信度 + 理由&#xa;固定 JSON Schema 输出" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" vertex="1" parent="1"><mxGeometry x="620" y="250" width="230" height="100" as="geometry" /></mxCell>
+        <mxCell id="7" value="分类规则校验&#xa;7 个一级类 + 二级类白名单&#xa;低置信度 / 无法识别 → 待审核" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1"><mxGeometry x="930" y="250" width="210" height="120" as="geometry" /></mxCell>
+        <mxCell id="8" value="人工审核队列&#xa;可改分类、排除、编辑标题&#xa;批量批准" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" vertex="1" parent="1"><mxGeometry x="930" y="480" width="210" height="90" as="geometry" /></mxCell>
+        <mxCell id="9" value="飞书知识库&#xa;已建好的一级 / 二级目录" style="swimlane;startSize=30;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;html=1;" vertex="1" parent="1"><mxGeometry x="1230" y="110" width="280" height="450" as="geometry" /></mxCell>
+        <mxCell id="10" value="目录 Token 映射&#xa;分类 → parent_node_token" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="9"><mxGeometry x="40" y="60" width="200" height="70" as="geometry" /></mxCell>
+        <mxCell id="11" value="创建或更新 Wiki Docx&#xa;保留 source URL / version / hash" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="9"><mxGeometry x="40" y="180" width="200" height="80" as="geometry" /></mxCell>
+        <mxCell id="12" value="任务与审计存储&#xa;运行状态、映射、失败重试&#xa;不保存完整正文" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1"><mxGeometry x="620" y="500" width="230" height="100" as="geometry" /></mxCell>
+        <mxCell id="20" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="2" target="3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="21" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="3" target="4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="22" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="4" target="5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="23" value="需处理" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="5" target="6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="24" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="6" target="7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="25" value="高置信度&#xa;自动发布" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.35;entryX=0;entryY=0.5;" edge="1" parent="1" source="7" target="10"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="26" value="低置信度&#xa;/ 冲突" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="7" target="8"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="27" value="批准后发布" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;entryX=0.5;entryY=1;" edge="1" parent="1" source="8" target="10"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1180" y="525" /><mxPoint x="1180" y="430" /></Array></mxGeometry></mxCell>
+        <mxCell id="28" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="9" source="10" target="11"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="29" value="读写状态" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="6" target="12"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="30" value="来源、目标、版本" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;dashed=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="12" target="11"><mxGeometry relative="1" as="geometry"><Array as="points"><mxPoint x="1120" y="550" /><mxPoint x="1120" y="330" /></Array></mxGeometry></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
