@@ -138,6 +138,16 @@ export interface KnowledgeDirectory {
   children: Array<{ title: string; nodeToken: string }>;
 }
 
+export interface TaskNotifyConfig {
+  enabled: boolean;
+  botId?: string; // 选中的系统已有机器人 ID
+  webhookUrl?: string; // Webhook 地址（可从 botId 自动解析或手动配置）
+  dayOfWeek: number; // 1-7, 1: 周一 ... 5: 周五 ... 7: 周日
+  time: string; // 如 "18:00"
+  lastSentAt?: string;
+  sendMode?: "both" | "image_only" | "text_only"; // 图文一起发送 (默认 both) | 仅发送长图 | 仅发送文字卡片
+}
+
 export interface KnowledgeMigrationTask {
   id: string;
   name: string;
@@ -147,10 +157,68 @@ export interface KnowledgeMigrationTask {
   treeUpdatedAt?: string;
   targetDirectories?: KnowledgeDirectory[];
   targetDirectoriesUpdatedAt?: string;
+  notifyConfig?: TaskNotifyConfig;
+  stats?: TaskMigrationStats;
+  statsUpdatedAt?: string;
   jobs: KnowledgeMigrationJob[];
   items: Record<string, KnowledgeMigrationItem>; // 以 wikiId 为键
   auditLogs: KnowledgeMigrationAuditLog[];
   createdAt: string;
+  updatedAt: string;
+}
+
+export type MigrationDocOrigin = "wiki_migration" | "external_feishu";
+
+export interface FeishuFullDocItem {
+  nodeToken: string;
+  documentToken: string;
+  title: string;
+  url: string;
+  createTime: string; // ISO 格式时间
+  creatorId?: string;
+  creatorName: string;
+  origin: MigrationDocOrigin;
+  wikiId?: string;
+  primaryCategory?: string;
+  secondaryCategory?: string;
+  parentNodeToken?: string;
+}
+
+export interface PersonCategoryCount {
+  category: string;
+  count: number;
+}
+
+export interface MigrationPersonStat {
+  personName: string;
+  userId?: string;
+  nonWikiCount: number; // 除 Wiki 之外迁移/新建的文档数
+  wikiCount: number;    // Wiki 归档系统迁移的文档数
+  totalCount: number;   // 总文档数
+  categories?: PersonCategoryCount[]; // 该成员非 Wiki 文档的分类分布
+}
+
+export interface MigrationWeeklyStat {
+  weekKey: string;     // 如 "2026-W38"
+  weekLabel: string;   // 如 "2026年第38周 (09/14 - 09/20)"
+  startDate: string;   // "2026-09-14"
+  endDate: string;     // "2026-09-20"
+  totalCount: number;
+  nonWikiCount: number; // 除 Wiki 之外迁移/新建的文档数
+  wikiCount: number;    // Wiki 归档系统迁移的文档数
+  persons: MigrationPersonStat[];
+  items: FeishuFullDocItem[];
+}
+
+export interface TaskMigrationStats {
+  taskId: string;
+  totalFeishuDocs: number;
+  totalNonWikiDocs: number;
+  totalWikiDocs: number;
+  totalPersons: number;
+  personsRank: MigrationPersonStat[];
+  categoryRank?: PersonCategoryCount[]; // 非 Wiki 文档的全局分类累计统计
+  weeks: MigrationWeeklyStat[];
   updatedAt: string;
 }
 

@@ -57,7 +57,7 @@ export interface ReminderTask {
 }
 
 export type FeishuMessagePayload = {
-  msg_type: "post" | "interactive" | "text";
+  msg_type: "post" | "interactive" | "text" | "image";
   content?: Record<string, unknown>;
   card?: Record<string, unknown>;
 };

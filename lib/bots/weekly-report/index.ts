@@ -19,7 +19,7 @@ export const weeklyReportBot: BotDefinition = {
         initialMembers: [{ name: "系统自动" }],
       }
     : {
-        name: "周报模板自动归档",
+        name: "前端周报更新提醒",
         type: "weekly_report",
         dayOfWeek: 5,
         time: "17:00",

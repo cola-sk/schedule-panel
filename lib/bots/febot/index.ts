@@ -18,7 +18,7 @@ export const febot: BotDefinition = {
         initialMembers: loadedConfig.schedule.initialMembers || [],
       }
     : {
-        name: "前端周会主持提醒",
+        name: "前端技术周会主持提醒",
         dayOfWeek: 1,
         time: "10:00",
         rotationStartAt: "2026-09-07T10:00:00+08:00",
@@ -26,4 +26,3 @@ export const febot: BotDefinition = {
       },
   buildMessage: buildWeeklyMeetingReminder,
 };
-

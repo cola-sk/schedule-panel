@@ -12,6 +12,8 @@ import type {
   KnowledgeMigrationTask,
   KnowledgeTaskConfig,
   LLMConfig,
+  TaskMigrationStats,
+  TaskNotifyConfig,
   WikiTreeNode,
 } from "./types";
 
@@ -21,6 +23,8 @@ const STORE_FILE = path.join(DATA_DIR, "knowledge-migrations.json");
 declare global {
   // eslint-disable-next-line no-var
   var __knowledgeMigrationStore__: KnowledgeMigrationState | undefined;
+  // eslint-disable-next-line no-var
+  var __knowledgeMigrationStoreMtime__: number | undefined;
 }
 
 function now() {
@@ -47,11 +51,16 @@ function isValidMigrationStore(store: unknown): store is KnowledgeMigrationState
 }
 
 function loadState(): KnowledgeMigrationState {
-  if (isValidMigrationStore(global.__knowledgeMigrationStore__)) {
-    return global.__knowledgeMigrationStore__;
-  }
   try {
     if (fs.existsSync(STORE_FILE)) {
+      const mtime = fs.statSync(STORE_FILE).mtimeMs;
+      if (
+        isValidMigrationStore(global.__knowledgeMigrationStore__) &&
+        global.__knowledgeMigrationStoreMtime__ === mtime
+      ) {
+        return global.__knowledgeMigrationStore__;
+      }
+
       const parsed = JSON.parse(fs.readFileSync(STORE_FILE, "utf-8")) as Partial<KnowledgeMigrationState>;
       
       // 判断是否已有新结构 tasks
@@ -75,6 +84,7 @@ function loadState(): KnowledgeMigrationState {
           if (!Array.isArray(task.jobs)) task.jobs = [];
           if (!Array.isArray(task.auditLogs)) task.auditLogs = [];
         }
+        global.__knowledgeMigrationStoreMtime__ = mtime;
         global.__knowledgeMigrationStore__ = {
           llmConfig: parsed.llmConfig || {},
           tasks: parsed.tasks,
@@ -158,6 +168,11 @@ function persist() {
   const tempFile = `${STORE_FILE}.tmp`;
   fs.writeFileSync(tempFile, JSON.stringify(state, null, 2), "utf-8");
   fs.renameSync(tempFile, STORE_FILE);
+  try {
+    global.__knowledgeMigrationStoreMtime__ = fs.statSync(STORE_FILE).mtimeMs;
+  } catch {
+    // ignore
+  }
 }
 
 // ----------------------------------------------------
@@ -323,6 +338,36 @@ export function saveTaskTargetDirectories(taskId: string, directories: Knowledge
   task.targetDirectories = directories;
   task.targetDirectoriesUpdatedAt = now();
   persist();
+}
+
+export function saveTaskMigrationStats(taskId: string, stats: TaskMigrationStats) {
+  const task = getTask(taskId);
+  if (!task) return;
+  task.stats = stats;
+  task.statsUpdatedAt = now();
+  persist();
+}
+
+export function getTaskMigrationStats(taskId: string): TaskMigrationStats | undefined {
+  const task = getTask(taskId);
+  return task?.stats;
+}
+
+export function saveTaskNotifyConfig(taskId: string, notifyConfig: TaskNotifyConfig): TaskNotifyConfig | undefined {
+  const task = getTask(taskId);
+  if (!task) return undefined;
+  task.notifyConfig = {
+    ...notifyConfig,
+    webhookUrl: notifyConfig.webhookUrl?.trim() || "",
+  };
+  task.updatedAt = now();
+  persist();
+  return task.notifyConfig;
+}
+
+export function getTaskNotifyConfig(taskId: string): TaskNotifyConfig | undefined {
+  const task = getTask(taskId);
+  return task?.notifyConfig;
 }
 
 // ----------------------------------------------------

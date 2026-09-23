@@ -248,7 +248,7 @@ export default function WeeklyReportPage() {
         <div className="mb-8 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight">周报模板自动归档</h1>
+              <h1 className="text-2xl font-semibold tracking-tight">{schedule?.name ?? "前端周报更新提醒"}</h1>
               <Badge variant={schedule?.enabled ? "success" : "secondary"}>
                 {schedule?.enabled ? "定时启用中" : "已停用"}
               </Badge>

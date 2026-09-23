@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { dispatchDueTasks } from "@/lib/core/scheduler";
+import { dispatchDueMigrationStats } from "@/lib/knowledge-migration/notifier";
 
 export async function GET(request: NextRequest) {
   const secret = process.env.CRON_SECRET;
@@ -8,6 +9,11 @@ export async function GET(request: NextRequest) {
   }
 
   const tasks = await dispatchDueTasks();
-  return NextResponse.json({ checkedAt: new Date().toISOString(), tasks });
+  const migrationTasks = await dispatchDueMigrationStats();
+  return NextResponse.json({
+    checkedAt: new Date().toISOString(),
+    tasks,
+    migrationTasks,
+  });
 }
 

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
+  BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -34,8 +35,10 @@ import {
   type KnowledgeMigrationItem,
   type KnowledgeMigrationTask,
   type MigrationStatus,
+  type TaskMigrationStats,
   type WikiTreeNode,
 } from "@/lib/knowledge-migration/types";
+import { KnowledgeMigrationStatsPanel } from "./knowledge-migration-stats-panel";
 
 type Taxonomy = Record<string, readonly string[]>;
 
@@ -143,6 +146,31 @@ export function KnowledgeMigrationDashboard() {
   const [publishing, setPublishing] = useState(false);
   const [directoryMigrating, setDirectoryMigrating] = useState(false);
   const [showDirectoryModal, setShowDirectoryModal] = useState(false);
+
+  // 视图模式：工作台 vs 周度对比统计
+  const [viewMode, setViewModeState] = useState<"workbench" | "stats">("workbench");
+
+  useEffect(() => {
+    try {
+      const savedMode = localStorage.getItem("km_view_mode") as "workbench" | "stats";
+      if (savedMode === "workbench" || savedMode === "stats") {
+        setViewModeState(savedMode);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const setViewMode = (mode: "workbench" | "stats") => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem("km_view_mode", mode);
+    } catch {
+      // ignore
+    }
+  };
+  const [statsData, setStatsData] = useState<TaskMigrationStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
 
   // 选中的 Wiki 目录树节点（"all" 为全部文档）
   const [selectedWikiId, setSelectedWikiId] = useState<string>("all");
@@ -273,8 +301,38 @@ export function KnowledgeMigrationDashboard() {
       setSelectedIds([]);
       setItemDrafts({});
       void loadTaskDetail(activeTaskId, filtersRef.current, activeTabRef.current, "all");
+      void loadTaskStats(activeTaskId);
     }
   }, [activeTaskId, loadTaskDetail]);
+
+  const loadTaskStats = useCallback(async (taskId: string) => {
+    if (!taskId) return;
+    try {
+      const res = await fetch(`/api/knowledge-migrations/tasks/${taskId}/stats`, { cache: "no-store" });
+      const data = await parseResponse<{ stats: TaskMigrationStats | null }>(res, "获取统计数据失败");
+      setStatsData(data.stats);
+      return data.stats;
+    } catch {
+      // 容错
+      return null;
+    }
+  }, []);
+
+  const refreshTaskStats = useCallback(async (taskId: string) => {
+    if (!taskId) return;
+    setStatsLoading(true);
+    try {
+      const res = await fetch(`/api/knowledge-migrations/tasks/${taskId}/stats`, { method: "POST" });
+      const data = await parseResponse<{ stats: TaskMigrationStats }>(res, "生成统计数据失败");
+      setStatsData(data.stats);
+      setNotice({ tone: "success", message: "飞书全量文档与周度统计已成功生成！" });
+      return data.stats;
+    } catch (error) {
+      setNotice({ tone: "error", message: error instanceof Error ? error.message : "扫描生成统计失败" });
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
 
   // 扫描中轮询
   const running = taskDetail?.task.overview.jobs.some((job) => job.status === "running") || false;
@@ -711,28 +769,90 @@ export function KnowledgeMigrationDashboard() {
           </div>
         )}
 
-        {/* 概览数据卡片 */}
+        {/* 顶部视图模式切换 Tab */}
         {currentTask && (
-          <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
-            {statuses.map((status) => (
-              <Card key={status.value} className="shadow-none">
-                <CardContent className="p-3.5">
-                  <p className="text-xs text-muted-foreground">{status.label}</p>
-                  <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
-                    {currentTask.overview?.counts?.[status.value] || 0}
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-          </section>
+          <div className="mb-6 flex items-center justify-between border-b border-border pb-3">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setViewMode("workbench")}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                  viewMode === "workbench"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                <Folder className="size-3.5" />
+                <span>归档工作台</span>
+                <span className="font-mono text-[10px] opacity-80">({currentTask.overview?.total || 0} 篇)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setViewMode("stats");
+                  if (activeTaskId) void loadTaskStats(activeTaskId);
+                }}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                  viewMode === "stats"
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                <BarChart3 className="size-3.5" />
+                <span>全量周度对比统计</span>
+                {statsData ? (
+                  <Badge
+                    variant="secondary"
+                    className={`${
+                      viewMode === "stats"
+                        ? "bg-white/20 text-white hover:bg-white/30"
+                        : "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300"
+                    } text-[10px] px-1.5 py-0 font-normal`}
+                  >
+                    非 Wiki: {statsData.totalNonWikiDocs} 篇 (全量 {statsData.totalFeishuDocs})
+                  </Badge>
+                ) : (
+                  <span className="inline-block size-2 rounded-full bg-indigo-500 animate-pulse" title="点击查看全量统计" />
+                )}
+              </button>
+            </div>
+          </div>
         )}
 
-        {/* 两栏工作台：左侧 Wiki 目录树，右侧待迁移/已迁移文档清单 */}
-        {currentTask && (
-          <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
-            {/* 左侧：要迁移的 Wiki 目录树 */}
-            <aside className="lg:col-span-4 xl:col-span-3">
-              <Card className="shadow-none">
+        {/* 模式 1：全量周度对比统计面板 */}
+        {currentTask && viewMode === "stats" && (
+          <KnowledgeMigrationStatsPanel
+            taskId={currentTask.id}
+            taskName={currentTask.name}
+            stats={statsData}
+            onRefresh={() => refreshTaskStats(currentTask.id)}
+            loading={statsLoading}
+          />
+        )}
+
+        {/* 模式 2：归档工作台 */}
+        {currentTask && viewMode === "workbench" && (
+          <>
+            {/* 概览数据卡片 */}
+            <section className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+              {statuses.map((status) => (
+                <Card key={status.value} className="shadow-none">
+                  <CardContent className="p-3.5">
+                    <p className="text-xs text-muted-foreground">{status.label}</p>
+                    <p className="mt-1 font-mono text-2xl font-semibold tabular-nums">
+                      {currentTask.overview?.counts?.[status.value] || 0}
+                    </p>
+                  </CardContent>
+                </Card>
+              ))}
+            </section>
+
+            {/* 两栏工作台：左侧 Wiki 目录树，右侧待迁移/已迁移文档清单 */}
+            <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-12">
+              {/* 左侧：要迁移的 Wiki 目录树 */}
+              <aside className="lg:col-span-4 xl:col-span-3">
+                <Card className="shadow-none">
                 <CardHeader className="border-b border-border p-4">
                   <div className="flex items-center justify-between">
                     <CardTitle className="flex items-center gap-2 text-sm font-semibold">
@@ -1119,7 +1239,8 @@ export function KnowledgeMigrationDashboard() {
               </Card>
             </section>
           </div>
-        )}
+        </>
+      )}
       </div>
 
       {/* 全局模型配置弹窗 */}

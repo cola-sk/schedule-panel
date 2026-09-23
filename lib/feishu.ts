@@ -13,7 +13,7 @@ export async function sendHostReminder(bot: BotConfig | undefined, host: Rotatio
   return sendTaskReminder({
     id: "manual-reminder",
     scheduleId: "febot-schedule",
-    scheduleName: "前端周会主持提醒",
+    scheduleName: "前端技术周会主持提醒",
     host,
     scheduledAt: new Date().toISOString(),
     status: "pending",

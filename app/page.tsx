@@ -740,7 +740,7 @@ export default function DashboardPage() {
                         className={inputControlClass}
                         name="name"
                         defaultValue={editingSchedule.name}
-                        placeholder="例如：周报模板自动归档"
+                        placeholder="例如：前端周报更新提醒"
                         required
                       />
                     </label>
