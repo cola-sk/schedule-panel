@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import type { TaskNotifyConfig } from "@/lib/knowledge-migration/types";
+import type { StatCycleType, TaskNotifyConfig } from "@/lib/knowledge-migration/types";
 
 interface BotOption {
   id: string;
@@ -43,6 +43,32 @@ const WEEKDAY_OPTIONS = [
   { value: 5, label: "每周五 (推荐)" },
   { value: 6, label: "每周六" },
   { value: 7, label: "每周日" },
+];
+
+const CYCLE_OPTIONS: Array<{
+  value: StatCycleType;
+  title: string;
+  badge?: string;
+  desc: string;
+}> = [
+  {
+    value: "last_week",
+    title: "上个自然周",
+    badge: "推荐周一推送",
+    desc: "统计上一完整自然周（周一 00:00 至 周日 23:59）新增的文档贡献榜",
+  },
+  {
+    value: "past_7_days",
+    title: "到今天为止前七天",
+    badge: "近7天滚动",
+    desc: "统计截至今天（过去 7 天内）新增的文档贡献榜",
+  },
+  {
+    value: "this_week",
+    title: "本自然周",
+    badge: "推荐周五推送",
+    desc: "统计本周内（本周一 00:00 截至目前）新增的文档贡献榜",
+  },
 ];
 
 function formatTime(isoStr?: string) {
@@ -77,6 +103,7 @@ export function KnowledgeMigrationNotifyDialog({
     webhookUrl: "",
     dayOfWeek: 5,
     time: "18:00",
+    cycleType: "this_week",
   });
 
   // 打开弹窗时拉取最新配置及系统可用机器人
@@ -97,7 +124,10 @@ export function KnowledgeMigrationNotifyDialog({
           if (!loadedConfig.botId && bots.length > 0) {
             loadedConfig.botId = bots[0].id;
           }
-          setConfig(loadedConfig);
+          setConfig({
+            ...loadedConfig,
+            cycleType: loadedConfig.cycleType || "this_week",
+          });
           // 若原本配了自定义 webhookUrl 但没有对应 botId，自动展开高级设置
           if (loadedConfig.webhookUrl && !loadedConfig.botId) {
             setShowAdvancedWebhook(true);
@@ -153,6 +183,7 @@ export function KnowledgeMigrationNotifyDialog({
           botId: config.botId || undefined,
           webhookUrl: config.webhookUrl?.trim() || undefined,
           sendMode: config.sendMode || "both",
+          cycleType: config.cycleType || "this_week",
         }),
       });
       const data = await res.json();
@@ -314,6 +345,65 @@ export function KnowledgeMigrationNotifyDialog({
                     onChange={(e) => setConfig({ ...config, time: e.target.value })}
                     className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
+                </div>
+              </div>
+
+              {/* 贡献榜统计周期选择 */}
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-foreground flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <span>🏆 贡献榜统计周期</span>
+                    <Badge variant="outline" className="text-[10px] py-0 px-1.5 font-normal text-muted-foreground">
+                      可按需选择
+                    </Badge>
+                  </span>
+                  <span className="text-[11px] font-normal text-muted-foreground">
+                    决定定时发送时所汇总的时间跨度
+                  </span>
+                </label>
+
+                <div className="grid grid-cols-1 gap-2">
+                  {CYCLE_OPTIONS.map((opt) => {
+                    const isSelected = (config.cycleType || "this_week") === opt.value;
+                    return (
+                      <div
+                        key={opt.value}
+                        onClick={() => setConfig({ ...config, cycleType: opt.value })}
+                        className={`flex cursor-pointer items-start justify-between rounded-xl border p-3 transition-all ${
+                          isSelected
+                            ? "border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/20 text-foreground ring-1 ring-indigo-500"
+                            : "border-border/70 bg-card hover:border-border hover:bg-muted/30"
+                        }`}
+                      >
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-semibold">{opt.title}</span>
+                            {opt.badge && (
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  isSelected
+                                    ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/60 dark:text-indigo-300"
+                                    : "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                {opt.badge}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">{opt.desc}</p>
+                        </div>
+                        <div
+                          className={`mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border ${
+                            isSelected
+                              ? "border-indigo-600 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-500"
+                              : "border-muted-foreground/30 bg-background"
+                          }`}
+                        >
+                          {isSelected && <Check className="size-2.5 stroke-[3]" />}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

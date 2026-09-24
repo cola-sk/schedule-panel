@@ -2,13 +2,19 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { spawn } from "child_process";
-import type { TaskMigrationStats } from "./types";
+import type { CycleStatsResult, TaskMigrationStats } from "./types";
 
 const CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
-export function generateDashboardHtml(stats: TaskMigrationStats, taskName: string): string {
+export function generateDashboardHtml(
+  stats: TaskMigrationStats,
+  taskName: string,
+  cycleStats?: CycleStatsResult,
+): string {
   const currentWeek = stats.weeks[0];
   const maxWeeklyCount = Math.max(...(stats.weeks || []).map((w) => w.totalCount), 1);
+  const cycleLabel = cycleStats ? cycleStats.cycleLabel : (currentWeek?.weekLabel || "历史全量");
+  const cycleShort = cycleStats?.cycleShortLabel || "本周";
 
   // 1. KPI 卡片数据
   const nonWikiPct =
@@ -94,6 +100,9 @@ export function generateDashboardHtml(stats: TaskMigrationStats, taskName: strin
               .join(", ")
           : "";
 
+      const cycleCount = cycleStats?.persons.find((cp) => cp.personName === p.personName)?.nonWikiCount || 0;
+      const cycleSub = cycleCount > 0 ? `<span style="color:#4f46e5;font-weight:700;margin-left:4px;">(+${cycleCount} ${cycleShort})</span>` : "";
+
       return `
         <div class="rank-item">
           <div class="rank-left">
@@ -104,7 +113,7 @@ export function generateDashboardHtml(stats: TaskMigrationStats, taskName: strin
             </div>
           </div>
           <div class="rank-right">
-            <span class="rank-main-count">${p.nonWikiCount} 篇</span>
+            <span class="rank-main-count">${p.nonWikiCount} 篇${cycleSub}</span>
             <span class="rank-sub-count">(共 ${p.totalCount})</span>
           </div>
         </div>
@@ -390,7 +399,7 @@ export function generateDashboardHtml(stats: TaskMigrationStats, taskName: strin
       <span class="header-title">📊 飞书知识库全景归档与周度迁移分析</span>
       <span class="header-tag">${taskName}</span>
     </div>
-    <div class="header-date">统计周期: ${currentWeek?.weekLabel || "历史全量"}</div>
+    <div class="header-date">统计周期: ${cycleLabel}</div>
   </div>
 
   <!-- 1. KPI 核心指标 -->
@@ -419,7 +428,7 @@ export function generateDashboardHtml(stats: TaskMigrationStats, taskName: strin
         <span>📚</span>
       </div>
       <div class="kpi-num">${stats.totalFeishuDocs}<span class="kpi-unit">篇</span></div>
-      <div class="kpi-sub">涵盖 ${stats.weeks?.length || 0} 个自然周的历史增量</div>
+      <div class="kpi-sub">${cycleStats ? `${cycleStats.cycleShortLabel}新增贡献 ${cycleStats.nonWikiCount} 篇` : `涵盖 ${stats.weeks?.length || 0} 个自然周的历史增量`}</div>
     </div>
 
     <div class="kpi-card">
@@ -428,6 +437,7 @@ export function generateDashboardHtml(stats: TaskMigrationStats, taskName: strin
         <span>👥</span>
       </div>
       <div class="kpi-num">${humanRank.length}<span class="kpi-unit">人</span></div>
+      <div class="kpi-sub" style="font-size:11px;color:#64748b;margin-top:2px;">${cycleStats ? `${cycleStats.cycleShortLabel}共 ${cycleStats.persons.filter((p) => p.nonWikiCount > 0).length} 人贡献` : "累计参与贡献成员"}</div>
     </div>
   </div>
 
@@ -466,6 +476,7 @@ export function generateDashboardHtml(stats: TaskMigrationStats, taskName: strin
     <div class="panel-card">
       <div class="panel-header">
         <span class="panel-title">👤 迁移人总贡献榜 (按非 Wiki)</span>
+        ${cycleStats ? `<span style="font-size:11px;color:#4f46e5;font-weight:600;">含 ${cycleStats.cycleShortLabel}增量</span>` : ""}
       </div>
       <div>
         ${rankRowsHtml}
@@ -486,9 +497,10 @@ export function generateDashboardHtml(stats: TaskMigrationStats, taskName: strin
  */
 export async function renderStatsDashboardImage(
   stats: TaskMigrationStats,
-  taskName: string
+  taskName: string,
+  cycleStats?: CycleStatsResult,
 ): Promise<string> {
-  const htmlContent = generateDashboardHtml(stats, taskName);
+  const htmlContent = generateDashboardHtml(stats, taskName, cycleStats);
   const tmpDir = os.tmpdir();
   const id = crypto.randomUUID();
   const htmlFile = path.join(tmpDir, `km-dashboard-${id}.html`);

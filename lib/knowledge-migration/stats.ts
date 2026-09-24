@@ -4,12 +4,15 @@ import path from "path";
 import pLimit from "p-limit";
 import { getFeishuClient, parseDocumentTarget, formatLarkError } from "@/lib/mcp/feishu-doc-engine";
 import { addTaskAuditLog, getTask, saveTaskMigrationStats, persistMigrationState } from "./store";
+import { atShanghaiLocal, chinaWeekday } from "@/lib/core/scheduler";
 import type {
+  CycleStatsResult,
   FeishuFullDocItem,
   KnowledgeMigrationTask,
   MigrationDocOrigin,
   MigrationPersonStat,
   MigrationWeeklyStat,
+  StatCycleType,
   TaskMigrationStats,
 } from "./types";
 
@@ -511,3 +514,116 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
 
   return statsResult;
 }
+
+/**
+ * 根据指定周期模式（上个自然周、到今天为止前七天、本自然周）计算该周期的文档贡献榜及统计数据
+ */
+export function computeCycleStats(
+  stats: TaskMigrationStats,
+  cycleType: StatCycleType = "this_week",
+  now = new Date(),
+): CycleStatsResult {
+  const weekday = chinaWeekday(now); // 1: Mon ... 7: Sun
+  const todayMidnight = atShanghaiLocal(now, "00:00");
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const formatDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const formatShort = (d: Date) => `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+
+  let startTime: Date;
+  let endTime: Date;
+  let cycleShortLabel = "";
+  let cycleTitle = "";
+  let cycleLabel = "";
+
+  if (cycleType === "last_week") {
+    // 上个自然周：上周一 00:00 至 上周日 23:59:59
+    const thisMonday = new Date(todayMidnight.getTime() - (weekday - 1) * 86400000);
+    startTime = new Date(thisMonday.getTime() - 7 * 86400000);
+    endTime = new Date(thisMonday.getTime() - 1);
+    cycleShortLabel = "上周";
+    cycleTitle = "上个自然周";
+    cycleLabel = `上个自然周 (${formatShort(startTime)} - ${formatShort(endTime)})`;
+  } else if (cycleType === "past_7_days") {
+    // 到今天为止前七天：过去7天（7天前00:00至今天结束）
+    startTime = new Date(todayMidnight.getTime() - 7 * 86400000);
+    endTime = new Date(atShanghaiLocal(now, "23:59").getTime() + 59999);
+    cycleShortLabel = "近7天";
+    cycleTitle = "到今天为止前七天";
+    cycleLabel = `到今天为止前七天 (${formatShort(startTime)} - ${formatShort(endTime)})`;
+  } else {
+    // this_week (默认)：本周一 00:00 至 本周日 23:59:59
+    const thisMonday = new Date(todayMidnight.getTime() - (weekday - 1) * 86400000);
+    startTime = thisMonday;
+    endTime = new Date(thisMonday.getTime() + 7 * 86400000 - 1);
+    cycleShortLabel = "本周";
+    cycleTitle = "本自然周";
+    cycleLabel = `本自然周 (${formatShort(startTime)} - ${formatShort(endTime)})`;
+  }
+
+  // 收集并过滤当前周期内的文档项
+  const allItems = (stats.weeks || []).flatMap((w) => w.items || []);
+  const startMs = startTime.getTime();
+  const endMs = endTime.getTime();
+
+  const cycleItems = allItems.filter((item) => {
+    const t = new Date(item.createTime).getTime();
+    return !Number.isNaN(t) && t >= startMs && t <= endMs;
+  });
+
+  let nonWikiCount = 0;
+  let wikiCount = 0;
+  const personMap = new Map<string, { nonWiki: number; wiki: number; userId?: string; catMap: Map<string, number> }>();
+
+  for (const item of cycleItems) {
+    if (item.origin === "wiki_migration") {
+      wikiCount++;
+    } else {
+      nonWikiCount++;
+    }
+
+    const pName = item.creatorName;
+    if (!personMap.has(pName)) {
+      personMap.set(pName, { nonWiki: 0, wiki: 0, userId: item.creatorId, catMap: new Map() });
+    }
+    const pStat = personMap.get(pName)!;
+    if (item.origin === "wiki_migration") {
+      pStat.wiki++;
+    } else {
+      pStat.nonWiki++;
+      const catName = item.primaryCategory || "未归类";
+      pStat.catMap.set(catName, (pStat.catMap.get(catName) || 0) + 1);
+    }
+  }
+
+  const persons: MigrationPersonStat[] = Array.from(personMap.entries())
+    .filter(([personName, stat]) => !isBotOrSystemAccount(personName, stat.userId))
+    .map(([personName, stat]) => ({
+      personName,
+      userId: stat.userId,
+      nonWikiCount: stat.nonWiki,
+      wikiCount: stat.wiki,
+      totalCount: stat.nonWiki + stat.wiki,
+      categories: Array.from(stat.catMap.entries())
+        .map(([category, count]) => ({ category, count }))
+        .sort((a, b) => b.count - a.count),
+    }))
+    .sort((a, b) => b.nonWikiCount - a.nonWikiCount || b.totalCount - a.totalCount);
+
+  return {
+    cycleType,
+    cycleKey: cycleType,
+    cycleLabel,
+    cycleShortLabel,
+    cycleTitle,
+    startDate: formatDate(startTime),
+    endDate: formatDate(endTime),
+    startTime,
+    endTime,
+    totalCount: cycleItems.length,
+    nonWikiCount,
+    wikiCount,
+    persons,
+    items: cycleItems.sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime()),
+  };
+}
+

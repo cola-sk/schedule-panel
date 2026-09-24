@@ -77,6 +77,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
               dayOfWeek: task.notifyConfig.dayOfWeek,
               time: task.notifyConfig.time,
               lastSentAt: task.notifyConfig.lastSentAt,
+              cycleType: task.notifyConfig.cycleType,
               nextRunAt: getNextMigrationStatsRunAt(task.notifyConfig),
             }
           : undefined,

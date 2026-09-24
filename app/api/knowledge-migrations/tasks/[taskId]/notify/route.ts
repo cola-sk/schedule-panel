@@ -28,6 +28,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       dayOfWeek: 5, // 默认周五
       time: "18:00", // 默认下午6点
       sendMode: "both",
+      cycleType: "this_week",
     };
 
     return NextResponse.json({
@@ -63,6 +64,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       dayOfWeek: 5,
       time: "18:00",
       sendMode: "both",
+      cycleType: "this_week",
     };
 
     const nextConfig: TaskNotifyConfig = {
@@ -71,6 +73,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       webhookUrl: body.webhookUrl !== undefined ? body.webhookUrl.trim() : prevConfig.webhookUrl,
       dayOfWeek: body.dayOfWeek !== undefined ? Number(body.dayOfWeek) : prevConfig.dayOfWeek,
       time: body.time !== undefined ? body.time.trim() : prevConfig.time,
+      cycleType: body.cycleType || prevConfig.cycleType || "this_week",
       sendMode: body.sendMode || prevConfig.sendMode || "both",
       lastSentAt: prevConfig.lastSentAt,
     };
@@ -93,15 +96,17 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const { taskId } = await params;
     let targetOverride: string | undefined;
     let sendModeOverride: "both" | "image_only" | "text_only" | undefined;
+    let cycleTypeOverride: TaskNotifyConfig["cycleType"] | undefined;
     try {
       const body = await request.json();
       targetOverride = body?.botId || body?.webhookUrl;
       sendModeOverride = body?.sendMode;
+      cycleTypeOverride = body?.cycleType;
     } catch {
       // ignore empty body
     }
 
-    const result = await sendTaskStatsNotification(taskId, targetOverride, sendModeOverride);
+    const result = await sendTaskStatsNotification(taskId, targetOverride, sendModeOverride, cycleTypeOverride);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(

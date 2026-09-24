@@ -2,7 +2,7 @@ import "server-only";
 import fs from "fs";
 import { sendWebhookMessage } from "@/lib/core/feishu-client";
 import { atShanghaiLocal, chinaDateKey, chinaWeekday } from "@/lib/core/scheduler";
-import { generateMigrationWeeklyStats } from "./stats";
+import { generateMigrationWeeklyStats, computeCycleStats } from "./stats";
 import { getBot } from "@/lib/core/store";
 import { getFeishuClient } from "@/lib/mcp/feishu-doc-engine";
 import { renderStatsDashboardImage } from "./image-generator";
@@ -13,9 +13,8 @@ import {
   persistMigrationState,
   saveTaskNotifyConfig,
 } from "./store";
-import type { TaskMigrationStats } from "./types";
+import type { TaskMigrationStats, TaskNotifyConfig, StatCycleType, CycleStatsResult } from "./types";
 import type { FeishuMessagePayload, ReminderTask } from "@/lib/core/types";
-import type { TaskNotifyConfig } from "./types";
 
 /**
  * 计算统计通知下一次应执行的时间。该结果与定时派发器的按周、按北京时间规则一致，
@@ -90,40 +89,43 @@ export function buildMigrationStatsCard(
   targetWikiUrl?: string,
   webAppUrl?: string,
   imageKey?: string,
+  cycleStats?: CycleStatsResult,
 ): FeishuMessagePayload {
-  const currentWeek = stats.weeks[0]; // 最新的当前自然周
-  const weekLabel = currentWeek ? currentWeek.weekLabel : "本周";
+  const effectiveCycle = cycleStats || computeCycleStats(stats, "this_week");
+  const cycleLabel = effectiveCycle.cycleLabel;
+  const cycleShort = effectiveCycle.cycleShortLabel;
+  const cycleTitle = effectiveCycle.cycleTitle;
 
-  // 1. 本周新增明细文本（已去掉最新沉淀文档）
-  let currentWeekText = "本周暂无文档贡献，各模块文档平稳沉淀中。";
-  if (currentWeek && currentWeek.persons.length > 0) {
-    const contributorPersons = currentWeek.persons.filter((p) => p.nonWikiCount > 0);
-    if (contributorPersons.length > 0) {
-      const personLines = contributorPersons.map((p) => {
-        const catDesc =
-          p.categories && p.categories.length > 0
-            ? `（分类: ${p.categories.map((c) => `${c.category} ${c.count}篇`).join("、")}）`
-            : "";
-        return `• 👤 **${p.personName}**：本周贡献 **${p.nonWikiCount}** 篇 ${catDesc}`;
-      });
+  // 1. 周期贡献榜明细文本
+  let periodText = `${cycleTitle}暂无文档贡献，各模块文档平稳沉淀中。`;
+  const contributorPersons = effectiveCycle.persons.filter((p) => p.nonWikiCount > 0);
+  if (contributorPersons.length > 0) {
+    const medalIcons = ["🥇", "🥈", "🥉"];
+    const personLines = contributorPersons.map((p, idx) => {
+      const medal = medalIcons[idx] || "•";
+      const catDesc =
+        p.categories && p.categories.length > 0
+          ? `（分类: ${p.categories.map((c) => `${c.category} ${c.count}篇`).join("、")}）`
+          : "";
+      return `${medal} 👤 **${p.personName}**：${cycleShort}贡献 **${p.nonWikiCount}** 篇 ${catDesc}`;
+    });
 
-      currentWeekText = personLines.join("\n");
-    }
+    periodText = personLines.join("\n");
   }
 
-  // 2. 全局人员贡献排行榜 (Top 8)
+  // 2. 全局累计人员贡献排行榜 (Top 8)
   const topPersons = stats.personsRank.slice(0, 8);
   const medalIcons = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣"];
   const rankLines = topPersons.map((p, idx) => {
     const icon = medalIcons[idx] || "•";
-    // 计算该成员本周新增数
-    const weekCount = currentWeek?.persons.find((cp) => cp.personName === p.personName)?.nonWikiCount || 0;
-    const weekAddDesc = weekCount > 0 ? ` (+${weekCount} 本周)` : "";
+    // 计算该成员在此周期的新增数
+    const cycleCount = effectiveCycle.persons.find((cp) => cp.personName === p.personName)?.nonWikiCount || 0;
+    const cycleAddDesc = cycleCount > 0 ? ` (+${cycleCount} ${cycleShort})` : "";
     const catDesc =
       p.categories && p.categories.length > 0
         ? ` ｜ 涉及: ${p.categories.slice(0, 2).map((c) => `${c.category}(${c.count})`).join(", ")}`
         : "";
-    return `${icon} **${p.personName}**：累计贡献 **${p.nonWikiCount}** 篇${weekAddDesc}${catDesc}`;
+    return `${icon} **${p.personName}**：累计贡献 **${p.nonWikiCount}** 篇${cycleAddDesc}${catDesc}`;
   });
 
   const rankText = rankLines.length > 0 ? rankLines.join("\n") : "暂无成员统计数据";
@@ -170,21 +172,21 @@ export function buildMigrationStatsCard(
               is_short: true,
               text: {
                 tag: "lark_md",
-                content: `**非Wiki文档贡献数量：**\n共 **${stats.totalNonWikiDocs}** 篇`,
+                content: `**非Wiki文档贡献：**\n共 **${stats.totalNonWikiDocs}** 篇`,
               },
             },
             {
               is_short: true,
               text: {
                 tag: "lark_md",
-                content: `**当前统计周期：**\n${weekLabel}`,
+                content: `**当前统计周期：**\n${cycleLabel}`,
               },
             },
             {
               is_short: true,
               text: {
                 tag: "lark_md",
-                content: `**本周贡献数量：**\n**${currentWeek?.nonWikiCount ?? 0}** 篇`,
+                content: `**${cycleShort}贡献数量：**\n**${effectiveCycle.nonWikiCount}** 篇`,
               },
             },
           ],
@@ -214,7 +216,7 @@ export function buildMigrationStatsCard(
           tag: "div",
           text: {
             tag: "lark_md",
-            content: `✨ **本周贡献人：**\n${currentWeekText}`,
+            content: `✨ **${cycleTitle}贡献榜：**\n${periodText}`,
           },
         },
         {
@@ -224,7 +226,7 @@ export function buildMigrationStatsCard(
           tag: "div",
           text: {
             tag: "lark_md",
-            content: `🏆 **贡献人排行榜：**\n${rankText}`,
+            content: `🏆 **累计总贡献榜：**\n${rankText}`,
           },
         },
         ...(actions.length > 0
@@ -250,6 +252,7 @@ export async function sendTaskStatsNotification(
   taskId: string,
   webhookUrlOverride?: string,
   sendModeOverride?: "both" | "image_only" | "text_only",
+  cycleTypeOverride?: StatCycleType,
 ): Promise<{ ok: boolean; message: string; stats?: TaskMigrationStats; imageKey?: string }> {
   const task = getTask(taskId);
   if (!task) throw new Error("任务不存在");
@@ -271,16 +274,18 @@ export async function sendTaskStatsNotification(
   }
 
   const sendMode = sendModeOverride || task.notifyConfig?.sendMode || "both";
+  const cycleType = cycleTypeOverride || task.notifyConfig?.cycleType || "this_week";
 
-  // 1. 生成最新统计数据
+  // 1. 生成最新全量统计数据与选定周期的贡献榜统计
   const stats = await generateMigrationWeeklyStats(taskId);
+  const cycleStats = computeCycleStats(stats, cycleType);
 
   let imageKey: string | undefined;
 
   // 2. 若需要发送图片 (both 或 image_only)，生成并上传高清看板长图
   if (sendMode === "both" || sendMode === "image_only") {
     try {
-      const imagePath = await renderStatsDashboardImage(stats, task.name);
+      const imagePath = await renderStatsDashboardImage(stats, task.name, cycleStats);
       const client = getFeishuClient();
       const fileStream = fs.createReadStream(imagePath);
       const uploadRes = await client.im.image.create({
@@ -319,6 +324,7 @@ export async function sendTaskStatsNotification(
       task.config.targetWikiRoot,
       undefined,
       imageKey,
+      cycleStats,
     );
     await sendWebhookMessage(targetWebhook, cardPayload);
   }
@@ -341,13 +347,13 @@ export async function sendTaskStatsNotification(
 
   addTaskAuditLog(taskId, {
     action: "stats_generated" as any,
-    detail: `已成功将归档统计周报推送到飞书群（模式：${modeDesc}）：Wiki 完成迁移 ${stats.totalWikiDocs} 篇，非Wiki文档贡献数量 ${stats.totalNonWikiDocs} 篇（本周贡献 ${stats.weeks[0]?.nonWikiCount ?? 0} 篇）`,
+    detail: `已成功将归档统计与贡献榜推送到飞书群（模式：${modeDesc}，周期：${cycleStats.cycleLabel}）：Wiki 完成迁移 ${stats.totalWikiDocs} 篇，非Wiki文档贡献 ${stats.totalNonWikiDocs} 篇（${cycleStats.cycleShortLabel}贡献 ${cycleStats.nonWikiCount} 篇）`,
   });
   persistMigrationState();
 
   return {
     ok: true,
-    message: `统计周报已成功发送至飞书群（${modeDesc}）！`,
+    message: `统计周报与贡献榜已成功发送至飞书群（${modeDesc} · ${cycleStats.cycleTitle}）！`,
     stats,
     imageKey,
   };

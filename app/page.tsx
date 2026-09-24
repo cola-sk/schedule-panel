@@ -59,6 +59,7 @@ type KnowledgeTaskSummary = {
     dayOfWeek?: number;
     time?: string;
     sendMode?: string;
+    cycleType?: string;
     lastSentAt?: string;
   };
 };
@@ -683,6 +684,13 @@ export default function DashboardPage() {
                             ? "自定义 Webhook"
                             : "未指定机器人";
 
+                        const cycleLabelMap: Record<string, string> = {
+                          last_week: "上个自然周",
+                          past_7_days: "到今天为止前七天",
+                          this_week: "本自然周",
+                        };
+                        const cycleName = kt.notifyConfig?.cycleType ? cycleLabelMap[kt.notifyConfig.cycleType] || "本自然周" : "本自然周";
+
                         return (
                           <Link
                             key={kt.id}
@@ -704,7 +712,7 @@ export default function DashboardPage() {
                                   </Badge>
                                 </div>
                                 <p className="mt-1 text-xs text-muted-foreground">
-                                  {`${cycleText} · 机器人：${botText} · 归档进度：${migrated}/${total} 篇已完成${pending > 0 ? ` · 待处理 ${pending} 篇` : ""}`}
+                                  {`${cycleText} · 榜单周期：${cycleName} · 机器人：${botText} · 归档进度：${migrated}/${total} 篇已完成${pending > 0 ? ` · 待处理 ${pending} 篇` : ""}`}
                                 </p>
                               </div>
                             </div>
