@@ -2,15 +2,11 @@ import { FeishuMessagePayload } from "../../core/types";
 
 export interface WeeklyReportNotificationContext {
   title: string;
-  yearName: string;
-  monthName: string;
   documentUrl: string;
-  sourceTitle?: string;
-  scheduledAt?: string;
 }
 
 /**
- * 周报自动生成后的飞书群通知卡片/消息
+ * 提醒成员更新周报的飞书群卡片
  */
 export function buildWeeklyReportNotification(
   context: WeeklyReportNotificationContext,
@@ -25,10 +21,17 @@ export function buildWeeklyReportNotification(
         template: "blue",
         title: {
           tag: "plain_text",
-          content: "📋 本周周报模板已自动生成",
+          content: "📣 请及时更新本周周报",
         },
       },
       elements: [
+        {
+          tag: "div",
+          text: {
+            tag: "lark_md",
+            content: "本周周报已准备好，请大家及时补充本周工作进展、风险事项和下周计划。",
+          },
+        },
         {
           tag: "div",
           fields: [
@@ -36,29 +39,18 @@ export function buildWeeklyReportNotification(
               is_short: true,
               text: {
                 tag: "lark_md",
-                content: `**周报标题：**\n${context.title}`,
+                content: `**本周周报：**\n${context.title}`,
               },
             },
             {
               is_short: true,
               text: {
                 tag: "lark_md",
-                content: `**所属归档：**\n${context.yearName} / ${context.monthName}`,
+                content: "**请完成：**\n更新个人工作进展",
               },
             },
           ],
         },
-        ...(context.sourceTitle
-          ? [
-              {
-                tag: "div",
-                text: {
-                  tag: "lark_md",
-                  content: `**模板来源：** ${context.sourceTitle}`,
-                },
-              },
-            ]
-          : []),
         {
           tag: "hr",
         },
@@ -69,7 +61,7 @@ export function buildWeeklyReportNotification(
               tag: "button",
               text: {
                 tag: "plain_text",
-                content: "👉 点击前往查看 / 编辑周报",
+                content: "👉 去更新周报",
               },
               type: "primary",
               url: context.documentUrl,

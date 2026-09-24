@@ -32,6 +32,7 @@ interface KnowledgeMigrationNotifyDialogProps {
   onOpenChange: (open: boolean) => void;
   taskId: string;
   taskName: string;
+  onConfigSaved?: () => Promise<unknown> | void;
 }
 
 const WEEKDAY_OPTIONS = [
@@ -61,6 +62,7 @@ export function KnowledgeMigrationNotifyDialog({
   onOpenChange,
   taskId,
   taskName,
+  onConfigSaved,
 }: KnowledgeMigrationNotifyDialogProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -127,6 +129,7 @@ export function KnowledgeMigrationNotifyDialog({
       }
       setConfig(data.notifyConfig);
       setMessage({ type: "success", text: "通知配置已保存！" });
+      await onConfigSaved?.();
     } catch (err: any) {
       setMessage({ type: "error", text: err?.message || "保存配置时出错" });
     } finally {

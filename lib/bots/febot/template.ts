@@ -1,14 +1,26 @@
 import { FeishuMessagePayload } from "../../core/types";
+import { getDocumentInfo } from "../../mcp/feishu-doc-engine";
 import { MessageContext } from "../types";
 
 const UPDATED_DOCUMENT_URL =
-  "https://doc.weixin.qq.com/smartsheet/s3_AagA0gYzAMICNWoREEa5WTyiK1TLJ?scode=AHwAVAcbAAgnUhodeTAagA0gYzAMI&is_external=0&commentVersion=1788227536000&wxworkQt=1&qt_source=Conv&qt_report_identifier=1788246838457&open_source=timeline&tab=agBUkq&viewId=vHxLgf";
+  "https://segway-ninebot.feishu.cn/wiki/G0vTwWW0giLXfukeROWc7kfmntb";
+
+async function getDocumentDisplayName(): Promise<string> {
+  try {
+    const documentInfo = await getDocumentInfo(UPDATED_DOCUMENT_URL);
+    return documentInfo.title?.trim() || UPDATED_DOCUMENT_URL;
+  } catch (error) {
+    console.warn("读取技术周会文档标题失败，将使用文档地址作为链接文本:", error);
+    return UPDATED_DOCUMENT_URL;
+  }
+}
 
 /**
  * FEBot 周会主持提醒专属消息模版
  */
-export function buildWeeklyMeetingReminder(context: MessageContext): FeishuMessagePayload {
+export async function buildWeeklyMeetingReminder(context: MessageContext): Promise<FeishuMessagePayload> {
   const { host } = context;
+  const documentDisplayName = await getDocumentDisplayName();
   const atElement = host.openId
     ? { tag: "at", user_id: host.openId }
     : { tag: "text", text: `@${host.name}` };
@@ -28,7 +40,7 @@ export function buildWeeklyMeetingReminder(context: MessageContext): FeishuMessa
             ],
             [
               { tag: "text", text: "文档地址:" },
-              { tag: "a", text: "点击查看", href: UPDATED_DOCUMENT_URL },
+              { tag: "a", text: documentDisplayName, href: UPDATED_DOCUMENT_URL },
             ],
           ],
         },

@@ -27,6 +27,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { KnowledgeMigrationNotifyDialog } from "@/components/knowledge-migration-notify-dialog";
 import type { FeishuFullDocItem, TaskMigrationStats } from "@/lib/knowledge-migration/types";
+import type { TaskNotifyConfig } from "@/lib/knowledge-migration/types";
+
+const WEEKDAY_LABELS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 
 function formatDate(isoStr?: string) {
   if (!isoStr) return "—";
@@ -46,6 +49,8 @@ interface KnowledgeMigrationStatsPanelProps {
   stats?: TaskMigrationStats | null;
   onRefresh: () => Promise<unknown> | void;
   loading?: boolean;
+  notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "dayOfWeek" | "time" | "lastSentAt"> & { nextRunAt?: string };
+  onNotifyConfigSaved?: () => Promise<unknown> | void;
 }
 
 export function KnowledgeMigrationStatsPanel({
@@ -54,6 +59,8 @@ export function KnowledgeMigrationStatsPanel({
   stats,
   onRefresh,
   loading = false,
+  notifySchedule,
+  onNotifyConfigSaved,
 }: KnowledgeMigrationStatsPanelProps) {
   const [selectedWeek, setSelectedWeek] = useState<string>("all");
   const [selectedOrigin, setSelectedOrigin] = useState<string>("all"); // "all" | "external_feishu" | "wiki_migration"
@@ -265,6 +272,21 @@ export function KnowledgeMigrationStatsPanel({
                 {loading ? "全量扫描分析中…" : "扫描并更新统计"}
               </Button>
             </div>
+
+            {notifySchedule?.enabled && (
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-100">
+                <span className="inline-flex items-center gap-1.5 font-semibold">
+                  <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
+                  定时任务已启动
+                </span>
+                <span>每{WEEKDAY_LABELS[notifySchedule.dayOfWeek] || "周"} {notifySchedule.time}（北京时间）执行</span>
+                <span className="inline-flex items-center gap-1 text-emerald-800/80 dark:text-emerald-200/80">
+                  <Calendar className="size-3.5" />
+                  下次执行：{formatDate(notifySchedule.nextRunAt)}
+                </span>
+                {notifySchedule.lastSentAt && <span>上次成功推送：{formatDate(notifySchedule.lastSentAt)}</span>}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -893,6 +915,7 @@ export function KnowledgeMigrationStatsPanel({
         onOpenChange={setNotifyDialogOpen}
         taskId={taskId}
         taskName={taskName}
+        onConfigSaved={onNotifyConfigSaved}
       />
     </div>
   );

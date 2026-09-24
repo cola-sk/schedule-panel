@@ -21,6 +21,7 @@ export async function GET() {
         config: getPublicTaskConfig(task),
         overview: getTaskOverview(task.id),
         treeNodeCount: task.tree?.length || 0,
+        notifyConfig: task.notifyConfig,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       })),

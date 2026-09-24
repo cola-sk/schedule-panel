@@ -1,9 +1,7 @@
 import {
   getFeishuClient,
   parseDocumentTarget,
-  readDocument,
-  appendDocumentContent,
-  updateDocumentContent,
+  copyDocumentContent,
   formatLarkError,
 } from "../../mcp/feishu-doc-engine";
 import { sendWebhookMessage } from "../../core/feishu-client";
@@ -134,6 +132,63 @@ async function getOrCreateWikiNode(
   };
 }
 
+async function copyWikiNodeWithRetry(
+  client: any,
+  sourceSpaceId: string,
+  sourceNodeToken: string,
+  targetSpaceId: string,
+  targetParentNodeToken: string,
+  title: string,
+): Promise<{ nodeToken: string; objToken: string }> {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const copied = await client.wiki.spaceNode.copy({
+        path: { space_id: sourceSpaceId, node_token: sourceNodeToken },
+        data: {
+          target_space_id: targetSpaceId,
+          target_parent_token: targetParentNodeToken,
+          title,
+        },
+      });
+      const code = copied?.code ?? copied?.response?.data?.code;
+      const msg = copied?.msg || copied?.message || "";
+      const isLock =
+        code === 131009 ||
+        msg.includes("131009") ||
+        msg.includes("lock contention") ||
+        msg.includes("resource locked");
+
+      if (isLock && attempt < maxAttempts) {
+        await new Promise((res) => setTimeout(res, 1000 * attempt + Math.floor(Math.random() * 500)));
+        continue;
+      }
+      if (copied.code !== 0) throw copied;
+
+      const node = copied.data?.node;
+      if (!node?.node_token || !node?.obj_token) {
+        throw new Error(formatLarkError(copied, `复制知识库模板 [${title}] 失败`));
+      }
+      return { nodeToken: node.node_token, objToken: node.obj_token };
+    } catch (error: any) {
+      const code = error?.code ?? error?.response?.data?.code;
+      const msg = error?.msg || error?.message || "";
+      const isLock =
+        code === 131009 ||
+        msg.includes("131009") ||
+        msg.includes("lock contention") ||
+        msg.includes("resource locked");
+
+      if (isLock && attempt < maxAttempts) {
+        await new Promise((res) => setTimeout(res, 1000 * attempt + Math.floor(Math.random() * 500)));
+        continue;
+      }
+      throw new Error(formatLarkError(error, `复制知识库模板 [${title}] 失败`));
+    }
+  }
+  throw new Error(`复制知识库模板 [${title}] 超时`);
+}
+
 function extractFeishuDomain(...urls: (string | undefined)[]): string {
   for (const url of urls) {
     if (!url) continue;
@@ -170,12 +225,7 @@ export async function executeWeeklyReportTask(
 
   const period = computeWeekPeriodInfo(scheduledAt || new Date());
   const client = getFeishuClient();
-
-  // 1. 拉取源文档内容
-  const sourceInfo = await readDocument(sourceDoc, { format: "markdown" });
-  const rawContent = sourceInfo.content || "";
-  // 移除开头的统一标题 `# 标题`，避免在已有标题的周报文档中重复出现双重标题
-  const markdownToCopy = rawContent.replace(/^#\s+[^\n]+\n+/, "").trim();
+  const sourceParsed = parseDocumentTarget(sourceDoc);
 
   // 2. 解析目标知识库根节点
   const targetParsed = parseDocumentTarget(targetWiki);
@@ -192,26 +242,51 @@ export async function executeWeeklyReportTask(
   const spaceId = rootRes.data.node.space_id;
   const rootNodeToken = targetParsed.wikiToken;
 
-  // 3. 递归定位或创建层级：根目录 -> 年份目录（如 2026年）
-  const yearAliases = [period.yearName.replace("年", "")]; // 兼容 "2026" 和 "2026年"
-  const yearNode = await getOrCreateWikiNode(client, spaceId, rootNodeToken, period.yearName, yearAliases);
+  // 3. 递归定位或创建层级：根目录 -> 年份汇总目录（如 2026工作汇总）
+  const yearNode = await getOrCreateWikiNode(client, spaceId, rootNodeToken, period.yearName);
 
-  // 4. 递归定位或创建层级：年份目录 -> 月份目录（如 9月）
-  const monthNum = period.monthName.replace("月", "");
-  const monthAliases = [`0${monthNum}月`, `${monthNum}月份`, `0${monthNum}月份`];
-  const monthNode = await getOrCreateWikiNode(client, spaceId, yearNode.nodeToken, period.monthName, monthAliases);
+  // 4. 递归定位或创建层级：年份汇总目录 -> 月份目录（如 202609）
+  const monthNode = await getOrCreateWikiNode(client, spaceId, yearNode.nodeToken, period.monthName);
 
-  // 5. 递归定位或创建周报文档：月份目录 -> 周报文档（如 9月21日 - 9月25日）
+  // 5. 复制模板为周报文档。知识库模板使用原生节点复制，完整保留表格和富文本格式。
   const weekTitle = period.weekTitle;
-  const weekNode = await getOrCreateWikiNode(client, spaceId, monthNode.nodeToken, weekTitle);
+  const existingWeekNode = (await listWikiChildren(client, spaceId, monthNode.nodeToken)).find(
+    (node) => node.title?.trim() === weekTitle && node.node_token && node.obj_token,
+  );
 
-  // 6. 写入或全量覆盖周报正文内容
-  if (markdownToCopy) {
-    if (weekNode.isCreated) {
-      await appendDocumentContent(weekNode.objToken, markdownToCopy);
-    } else {
-      await updateDocumentContent(weekNode.objToken, markdownToCopy, { title: weekTitle });
+  let weekNode: { nodeToken: string; objToken: string; isCreated: boolean };
+  if (existingWeekNode?.node_token && existingWeekNode.obj_token) {
+    await copyDocumentContent(sourceDoc, existingWeekNode.obj_token, { title: weekTitle });
+    weekNode = {
+      nodeToken: existingWeekNode.node_token,
+      objToken: existingWeekNode.obj_token,
+      isCreated: false,
+    };
+  } else if (sourceParsed.wikiToken) {
+    const sourceNodeResult = await client.wiki.space.getNode({
+      params: { token: sourceParsed.wikiToken, obj_type: "wiki" },
+    });
+    const sourceSpaceId = sourceNodeResult.data?.node?.space_id;
+    if (sourceNodeResult.code !== 0 || !sourceSpaceId) {
+      throw new Error(formatLarkError(sourceNodeResult, "读取周报模板知识库节点失败"));
     }
+    const copiedNode = await copyWikiNodeWithRetry(
+      client,
+      sourceSpaceId,
+      sourceParsed.wikiToken,
+      spaceId,
+      monthNode.nodeToken,
+      weekTitle,
+    );
+    weekNode = { ...copiedNode, isCreated: true };
+  } else {
+    const createdNode = await createWikiDocxNodeWithRetry(client, spaceId, monthNode.nodeToken, weekTitle);
+    await copyDocumentContent(sourceDoc, createdNode.obj_token, { title: weekTitle });
+    weekNode = {
+      nodeToken: createdNode.node_token,
+      objToken: createdNode.obj_token,
+      isCreated: true,
+    };
   }
 
   const baseDomain = extractFeishuDomain(schedule.targetFolderId, schedule.sourceDocumentId);
@@ -226,11 +301,7 @@ export async function executeWeeklyReportTask(
     if (bot.enabled && bot.webhookUrl) {
       const payload = buildWeeklyReportNotification({
         title: weekTitle,
-        yearName: period.yearName,
-        monthName: period.monthName,
         documentUrl: docUrl,
-        sourceTitle: sourceInfo.title,
-        scheduledAt,
       });
       try {
         await sendWebhookMessage(bot.webhookUrl, payload);

@@ -46,7 +46,7 @@ export interface BotDefinition {
     targetFolderId?: string;
   };
   /** 构建个性化飞书消息/卡片 */
-  buildMessage?: (context: MessageContext) => FeishuMessagePayload;
+  buildMessage?: (context: MessageContext) => FeishuMessagePayload | Promise<FeishuMessagePayload>;
   /** 专用任务执行器（如自动拉取并创建周报文档） */
   executeTask?: (context: TaskExecutionContext) => Promise<TaskExecutionResult>;
   /** 可选：针对该 Bot 的专用名单解析钩子（未提供则使用通用解析器） */

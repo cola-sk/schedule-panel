@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getChineseHolidays } from "@/lib/core/holidays";
 import { tasksBetween } from "@/lib/core/scheduler";
+import { migrationStatsTasksBetween } from "@/lib/knowledge-migration/notifier";
 
 function parseDate(value: string | null): Date | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
@@ -31,7 +32,9 @@ export async function GET(request: NextRequest) {
   const years = [];
   for (let year = Number(startValue!.slice(0, 4)); year <= Number(endValue!.slice(0, 4)); year += 1) years.push(year);
   // 先生成任务再读取假期，避免首次查询某个年份时并发写入同一份缓存。
-  const tasks = await tasksBetween(start, end);
+  const scheduledTasks = await tasksBetween(start, end);
+  const migrationTasks = migrationStatsTasksBetween(start, end);
+  const tasks = [...scheduledTasks, ...migrationTasks].sort((left, right) => left.scheduledAt.localeCompare(right.scheduledAt));
   const holidays = await getChineseHolidays(years);
   return NextResponse.json({ tasks, holidays });
 }

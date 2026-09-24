@@ -1,12 +1,12 @@
 import "server-only";
 import OpenAI from "openai";
 import { z } from "zod";
+import type { AIModelConfig } from "@/lib/ai-config/store";
 import {
   isValidCategory,
   resolveCategory,
   type CategorySuggestion,
   type DynamicTaxonomy,
-  type LLMConfig,
   type SourceDocument,
 } from "./types";
 
@@ -25,7 +25,7 @@ function parseJson(content: string) {
 }
 
 export async function classifyDocument(
-  llmConfig: LLMConfig,
+  llmConfig: AIModelConfig,
   source: SourceDocument,
   markdown: string,
   taxonomy: DynamicTaxonomy,

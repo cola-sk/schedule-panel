@@ -136,6 +136,14 @@ export function parseDocumentTarget(urlOrToken: string): ParsedTarget {
     return { raw: trimmed, type: "docx", documentId: trimmed };
   }
 
+  if (/^(?:bas)[a-zA-Z0-9_-]+$/.test(trimmed)) {
+    return { raw: trimmed, type: "bitable", appToken: trimmed };
+  }
+
+  if (/^(?:sht)[a-zA-Z0-9_-]+$/.test(trimmed)) {
+    return { raw: trimmed, type: "sheet", appToken: trimmed };
+  }
+
   return { raw: trimmed, type: "docx", documentId: trimmed };
 }
 
@@ -182,7 +190,11 @@ export async function resolveDocumentTarget(
     }
 
     const objToken = nodeRes.data?.node?.obj_token;
-    const objType = nodeRes.data?.node?.obj_type as "docx" | "sheet" | "bitable" | string;
+    const rawObjType = nodeRes.data?.node?.obj_type as string | undefined;
+    const objType =
+      rawObjType === "doc" ? "docx" :
+      rawObjType === "base" ? "bitable" :
+      (rawObjType as "docx" | "sheet" | "bitable" | undefined);
     const title = nodeRes.data?.node?.title;
 
     if (!objToken) {
@@ -190,7 +202,7 @@ export async function resolveDocumentTarget(
     }
 
     return {
-      objType: (objType === "doc" ? "docx" : objType) as "docx" | "sheet" | "bitable",
+      objType: (objType || "docx") as "docx" | "sheet" | "bitable",
       token: objToken,
       wikiToken: parsed.wikiToken,
       title: title || undefined,
@@ -1241,6 +1253,185 @@ async function clearDocumentChildren(client: lark.Client, documentId: string) {
       throw new Error(formatLarkError(delRes, `清空旧文档内容失败 (document_id: ${documentId})`));
     }
   }
+}
+
+async function listDocumentBlocks(client: lark.Client, documentId: string): Promise<Array<any>> {
+  const blocks: Array<any> = [];
+  let pageToken: string | undefined;
+
+  do {
+    let response;
+    try {
+      response = await client.docx.documentBlock.list({
+        path: { document_id: documentId },
+        params: {
+          page_size: 500,
+          ...(pageToken ? { page_token: pageToken } : {}),
+        },
+      });
+    } catch (error: any) {
+      throw new Error(formatLarkError(error, `读取飞书文档块失败 (document_id: ${documentId})`));
+    }
+
+    if (response.code !== 0) {
+      throw new Error(formatLarkError(response, `读取飞书文档块失败 (document_id: ${documentId})`));
+    }
+
+    blocks.push(...(response.data?.items ?? []));
+    pageToken = response.data?.has_more ? response.data.page_token : undefined;
+  } while (pageToken);
+
+  return blocks;
+}
+
+function cloneDocumentBlockGroups(sourceBlocks: Array<any>, sourceDocumentId: string) {
+  const rootBlock =
+    sourceBlocks.find((block) => block.block_id === sourceDocumentId) ??
+    sourceBlocks.find((block) => block.block_type === 1);
+
+  if (!rootBlock?.block_id) {
+    throw new Error(`未找到源文档根块 (document_id: ${sourceDocumentId})`);
+  }
+
+  const sourceBlocksById = new Map<string, any>();
+  for (const block of sourceBlocks) {
+    if (block.block_id && block.block_id !== rootBlock.block_id) {
+      sourceBlocksById.set(block.block_id, block);
+    }
+  }
+
+  const rootChildIds = (rootBlock.children ?? []).filter((id: string) => sourceBlocksById.has(id));
+  if (rootChildIds.length === 0) return [];
+
+  const newBlockIds = new Map<string, string>();
+  for (const sourceId of sourceBlocksById.keys()) {
+    newBlockIds.set(sourceId, `doxcn${randomUUID().replace(/-/g, "").slice(0, 24)}`);
+  }
+
+  const cloneValue = (value: any, key?: string): any => {
+    if (Array.isArray(value)) {
+      return value.map((item) => cloneValue(item, key));
+    }
+    if (!value || typeof value !== "object") {
+      if (key === "block_id" && typeof value === "string") return newBlockIds.get(value) ?? value;
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(
+          ([childKey]) =>
+            childKey !== "parent_id" &&
+            childKey !== "merge_info" &&
+            childKey !== "cells",
+        )
+        .map(([childKey, childValue]) => {
+          if (childKey === "block_id" && typeof childValue === "string") {
+            return [childKey, newBlockIds.get(childValue) ?? childValue];
+          }
+          if (childKey === "children" && Array.isArray(childValue)) {
+            return [childKey, childValue.map((id) => newBlockIds.get(id) ?? id)];
+          }
+          return [childKey, cloneValue(childValue, childKey)];
+        }),
+    );
+  };
+
+  const collectSubtree = (blockId: string, visited = new Set<string>()): Array<any> => {
+    if (visited.has(blockId)) return [];
+    visited.add(blockId);
+    const block = sourceBlocksById.get(blockId);
+    if (!block) return [];
+    return [block, ...(block.children ?? []).flatMap((childId: string) => collectSubtree(childId, visited))];
+  };
+
+  const groups: Array<{ childrenId: string[]; descendants: Array<any> }> = [];
+  let groupSourceBlocks: Array<any> = [];
+  let groupRootIds: string[] = [];
+
+  const flush = () => {
+    if (!groupSourceBlocks.length) return;
+    groups.push({
+      childrenId: groupRootIds.map((id) => newBlockIds.get(id)!),
+      descendants: groupSourceBlocks.map((block) => cloneValue(block)),
+    });
+    groupSourceBlocks = [];
+    groupRootIds = [];
+  };
+
+  for (const rootChildId of rootChildIds) {
+    const subtree = collectSubtree(rootChildId);
+    if (subtree.length > 1000) {
+      throw new Error("周报模板包含超过 1000 个连续嵌套块，无法一次保留原始格式复制");
+    }
+    if (groupSourceBlocks.length + subtree.length > 1000) flush();
+    groupRootIds.push(rootChildId);
+    groupSourceBlocks.push(...subtree);
+  }
+  flush();
+
+  return groups;
+}
+
+/**
+ * 以飞书原始块结构覆盖目标文档，保留表格、富文本和块级样式。
+ */
+export async function copyDocumentContent(
+  sourceDocumentIdOrUrl: string,
+  targetDocumentIdOrUrl: string,
+  options?: { title?: string },
+) {
+  const client = getFeishuClient();
+  const source = await resolveRealDocumentId(client, sourceDocumentIdOrUrl);
+  const target = await resolveRealDocumentId(client, targetDocumentIdOrUrl);
+  const sourceBlocks = await listDocumentBlocks(client, source.documentId);
+  const groups = cloneDocumentBlockGroups(sourceBlocks, source.documentId);
+
+  await clearDocumentChildren(client, target.documentId);
+
+  for (const group of groups) {
+    let response;
+    try {
+      response = await client.docx.documentBlockDescendant.create({
+        path: { document_id: target.documentId, block_id: target.documentId },
+        data: {
+          children_id: group.childrenId,
+          descendants: group.descendants,
+          index: -1,
+        },
+      });
+    } catch (error: any) {
+      throw new Error(formatLarkError(error, `复制飞书文档原始格式失败 (document_id: ${target.documentId})`));
+    }
+    if (response.code !== 0) {
+      throw new Error(formatLarkError(response, `复制飞书文档原始格式失败 (document_id: ${target.documentId})`));
+    }
+  }
+
+  if (options?.title) {
+    try {
+      await client.docx.documentBlock.patch({
+        path: { document_id: target.documentId, block_id: target.documentId },
+        data: {
+          update_text_elements: {
+            elements: [{ text_run: { content: options.title } }],
+          },
+        },
+      });
+    } catch {
+      // 标题更新失败不影响正文复制
+    }
+  }
+
+  return {
+    documentId: target.documentId,
+    wikiToken: target.wikiToken,
+    title: options?.title || target.title || "文档",
+    copiedBlocks: sourceBlocks.length - 1,
+    url: target.wikiToken
+      ? `https://open.feishu.cn/wiki/${target.wikiToken}`
+      : `https://open.feishu.cn/docx/${target.documentId}`,
+  };
 }
 
 /**

@@ -12,6 +12,39 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     // fallback
   }
 
+  if (decodedId.startsWith("knowledge-migration:") || rawId.startsWith("knowledge-migration:")) {
+    const fullId = decodedId.startsWith("knowledge-migration:") ? decodedId : rawId;
+    const parts = fullId.split(":");
+    const kmTaskId = parts[1];
+    try {
+      const { sendTaskStatsNotification } = await import("@/lib/knowledge-migration/notifier");
+      const { getTask } = await import("@/lib/knowledge-migration/store");
+      const kmTask = getTask(kmTaskId);
+      const result = await sendTaskStatsNotification(kmTaskId);
+      const sent = recordTask({
+        id: fullId,
+        scheduleId: `knowledge-migration:${kmTaskId}`,
+        scheduleName: kmTask?.name ? `知识库周报 · ${kmTask.name}` : "知识库周报 · 归档统计",
+        host: { name: "系统自动" },
+        scheduledAt: parts[2] || new Date().toISOString(),
+        status: "sent",
+        triggerType: "manual",
+        sentAt: new Date().toISOString(),
+        content: result.message,
+      });
+      return NextResponse.json({
+        task: sent,
+        result: {
+          mocked: false,
+          botName: "飞书通知机器人",
+          content: result.message,
+        },
+      });
+    } catch (err: any) {
+      return NextResponse.json({ error: err?.message || "发送失败" }, { status: 500 });
+    }
+  }
+
   let task = (await upcomingTasks(50)).find((item) => item.id === decodedId || item.id === rawId);
   if (!task) {
     for (const candidateId of [decodedId, rawId]) {

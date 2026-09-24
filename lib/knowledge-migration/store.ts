@@ -1,6 +1,7 @@
 import "server-only";
 import fs from "fs";
 import path from "path";
+import type { AIModelConfig } from "@/lib/ai-config/store";
 import type {
   ItemFilters,
   KnowledgeDirectory,
@@ -11,7 +12,6 @@ import type {
   KnowledgeMigrationState,
   KnowledgeMigrationTask,
   KnowledgeTaskConfig,
-  LLMConfig,
   TaskMigrationStats,
   TaskNotifyConfig,
   WikiTreeNode,
@@ -95,7 +95,7 @@ function loadState(): KnowledgeMigrationState {
 
       // 旧结构升级迁移：提取全局 LLM 配置并创建默认任务
       const oldConfig = (parsed as unknown as { config?: KnowledgeMigrationConfig }).config;
-      const llmConfig: LLMConfig = {
+      const llmConfig: AIModelConfig = {
         llmBaseUrl: oldConfig?.llmBaseUrl,
         llmApiKey: oldConfig?.llmApiKey,
         llmModel: oldConfig?.llmModel,
@@ -178,33 +178,6 @@ function persist() {
 // ----------------------------------------------------
 // 全局模型配置 (LLM Config)
 // ----------------------------------------------------
-
-export function getLLMConfig(): LLMConfig {
-  return loadState().llmConfig;
-}
-
-export function saveLLMConfig(input: Partial<LLMConfig>): LLMConfig {
-  const state = loadState();
-  const previous = state.llmConfig;
-  const next: LLMConfig = {
-    ...previous,
-    ...input,
-    llmApiKey: input.llmApiKey !== undefined && input.llmApiKey.trim() !== "" ? input.llmApiKey : previous.llmApiKey,
-    updatedAt: now(),
-  };
-  state.llmConfig = next;
-  persist();
-  return next;
-}
-
-export function getPublicLLMConfig() {
-  const config = getLLMConfig();
-  const { llmApiKey, ...rest } = config;
-  return {
-    ...rest,
-    llmApiKeyConfigured: Boolean(llmApiKey && llmApiKey.trim()),
-  };
-}
 
 // ----------------------------------------------------
 // 任务管理 (Tasks)
@@ -670,26 +643,13 @@ export function persistMigrationState() {
 
 export function getMigrationConfig(): KnowledgeMigrationConfig | undefined {
   const task = getTask();
-  const llm = getLLMConfig();
   if (!task) return undefined;
-  return {
-    ...task.config,
-    llmBaseUrl: llm.llmBaseUrl,
-    llmApiKey: llm.llmApiKey,
-    llmModel: llm.llmModel,
-  };
+  return task.config;
 }
 
 export function saveMigrationConfig(config: KnowledgeMigrationConfig): KnowledgeMigrationConfig {
   const task = getTask();
   if (!task) throw new Error("未找到默认任务");
-  if (config.llmBaseUrl || config.llmApiKey || config.llmModel) {
-    saveLLMConfig({
-      llmBaseUrl: config.llmBaseUrl,
-      llmApiKey: config.llmApiKey,
-      llmModel: config.llmModel,
-    });
-  }
   updateTask(task.id, {
     config: {
       confluenceBaseUrl: config.confluenceBaseUrl,
@@ -708,10 +668,8 @@ export function getPublicMigrationConfig() {
   const task = getTask();
   if (!task) return undefined;
   const publicTask = getPublicTaskConfig(task);
-  const publicLLM = getPublicLLMConfig();
   return {
     ...publicTask,
-    ...publicLLM,
   };
 }
 
@@ -773,4 +731,3 @@ export function addAuditLog(input: Omit<KnowledgeMigrationAuditLog, "id" | "crea
   if (!task) return undefined;
   return addTaskAuditLog(task.id, input);
 }
-

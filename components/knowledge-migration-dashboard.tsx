@@ -3,13 +3,11 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft,
   BarChart3,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleAlert,
-  Cpu,
   FilePlus2,
   FileText,
   Filter,
@@ -36,6 +34,7 @@ import {
   type KnowledgeMigrationTask,
   type MigrationStatus,
   type TaskMigrationStats,
+  type TaskNotifyConfig,
   type WikiTreeNode,
 } from "@/lib/knowledge-migration/types";
 import { KnowledgeMigrationStatsPanel } from "./knowledge-migration-stats-panel";
@@ -70,15 +69,10 @@ type TaskDetailResponse = {
       counts: Record<MigrationStatus, number>;
       jobs: Array<{ id: string; status: string; total: number; processed: number; failed: number; startedAt: string }>;
     };
+    notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "dayOfWeek" | "time" | "lastSentAt"> & { nextRunAt?: string };
   };
   currentNodeItem?: KnowledgeMigrationItem;
   items: KnowledgeMigrationItem[];
-};
-
-type LLMConfigData = {
-  llmBaseUrl?: string;
-  llmModel?: string;
-  llmApiKeyConfigured?: boolean;
 };
 
 type ItemDraft = {
@@ -136,7 +130,6 @@ export function KnowledgeMigrationDashboard() {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [activeTaskId, setActiveTaskId] = useState<string>("");
   const [taskDetail, setTaskDetail] = useState<TaskDetailResponse>();
-  const [llmConfig, setLlmConfig] = useState<LLMConfigData>();
 
   const [loading, setLoading] = useState(true);
   const [taskLoading, setTaskLoading] = useState(false);
@@ -189,7 +182,6 @@ export function KnowledgeMigrationDashboard() {
   });
   const [itemDrafts, setItemDrafts] = useState<Record<string, ItemDraft>>({});
 
-  const [showModelModal, setShowModelModal] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [isEditingTask, setIsEditingTask] = useState(false);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; message: string } | null>(null);
@@ -209,18 +201,7 @@ export function KnowledgeMigrationDashboard() {
     };
   }, [notice]);
 
-  // 1. 加载全局 LLM 配置
-  const loadLLMConfig = useCallback(async () => {
-    try {
-      const res = await fetch("/api/knowledge-migrations/llm", { cache: "no-store" });
-      const data = await parseResponse<{ config?: LLMConfigData }>(res, "获取模型配置失败");
-      if (res.ok && data.config) setLlmConfig(data.config);
-    } catch {
-      // 忽略
-    }
-  }, []);
-
-  // 2. 加载任务列表
+  // 加载任务列表
   const loadTasks = useCallback(async () => {
     try {
       const res = await fetch("/api/knowledge-migrations/tasks", { cache: "no-store" });
@@ -228,7 +209,9 @@ export function KnowledgeMigrationDashboard() {
       const list = data.tasks || [];
       setTasks(list);
       if (list.length > 0 && !activeTaskId) {
-        setActiveTaskId(list[0].id);
+        const queryTaskId = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("taskId") : null;
+        const matched = queryTaskId && list.some((t) => t.id === queryTaskId);
+        setActiveTaskId(matched ? queryTaskId! : list[0].id);
       }
       return list;
     } catch (error) {
@@ -287,10 +270,10 @@ export function KnowledgeMigrationDashboard() {
   // 初始化
   useEffect(() => {
     void (async () => {
-      await Promise.all([loadLLMConfig(), loadTasks()]);
+      await loadTasks();
       setLoading(false);
     })();
-  }, [loadLLMConfig, loadTasks]);
+  }, [loadTasks]);
 
   // 切换任务时加载详情 (仅在 activeTaskId 真正切换时重置为全选)
   const prevTaskIdRef = useRef<string | null>(null);
@@ -617,13 +600,6 @@ export function KnowledgeMigrationDashboard() {
         {/* 顶部全局导航栏 */}
         <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
           <div>
-            <Link
-              href="/"
-              className="mb-2 inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-            >
-              <ArrowLeft className="size-3.5" />
-              返回轮值管理台
-            </Link>
             <h1 className="text-2xl font-semibold tracking-tight">知识库归档</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               多 Wiki 任务独立配置，左侧 Wiki 目录树精准溯源，按 Wiki 唯一 ID（pageId）审核与记录迁移状态。
@@ -631,15 +607,6 @@ export function KnowledgeMigrationDashboard() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
-            {/* 模型配置入口 */}
-            <Button variant="outline" size="sm" onClick={() => setShowModelModal(true)}>
-              <Cpu className="size-3.5 text-indigo-500" />
-              模型配置
-              <Badge variant={llmConfig?.llmApiKeyConfigured ? "success" : "secondary"} className="ml-1 text-[10px]">
-                {llmConfig?.llmModel || (llmConfig?.llmApiKeyConfigured ? "已配置" : "未配置")}
-              </Badge>
-            </Button>
-
             {/* 新建任务 */}
             <Button
               size="sm"
@@ -828,6 +795,8 @@ export function KnowledgeMigrationDashboard() {
             stats={statsData}
             onRefresh={() => refreshTaskStats(currentTask.id)}
             loading={statsLoading}
+            notifySchedule={currentTask.notifySchedule}
+            onNotifyConfigSaved={() => loadTaskDetail(currentTask.id, undefined, undefined, undefined, { silent: true })}
           />
         )}
 
@@ -1242,17 +1211,6 @@ export function KnowledgeMigrationDashboard() {
         </>
       )}
       </div>
-
-      {/* 全局模型配置弹窗 */}
-      <LLMConfigModal
-        open={showModelModal}
-        onOpenChange={setShowModelModal}
-        llmConfig={llmConfig}
-        onSaved={() => {
-          void loadLLMConfig();
-          setNotice({ tone: "success", message: "全局模型配置已保存！" });
-        }}
-      />
 
       {/* 任务创建/修改配置弹窗 */}
       <TaskConfigModal
@@ -1771,111 +1729,6 @@ function TaskItemRow({
   );
 }
 
-// ----------------------------------------------------
-// 全局模型配置模态框 (LLMConfigModal)
-// ----------------------------------------------------
-
-function LLMConfigModal({
-  open,
-  onOpenChange,
-  llmConfig,
-  onSaved,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  llmConfig?: LLMConfigData;
-  onSaved: () => void;
-}) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string>();
-
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setSaving(true);
-    setError(undefined);
-    try {
-      const form = new FormData(e.currentTarget);
-      const res = await fetch("/api/knowledge-migrations/llm", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.fromEntries(form.entries())),
-      });
-      await parseResponse(res, "保存模型配置失败");
-      onSaved();
-      onOpenChange(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "保存失败");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/45 backdrop-blur-[1px]" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-card p-6 text-card-foreground shadow-2xl focus:outline-none">
-          <Dialog.Title className="flex items-center gap-2 text-base font-semibold tracking-tight">
-            <Cpu className="size-4 text-indigo-500" />
-            全局模型配置 (LLM Settings)
-          </Dialog.Title>
-          <Dialog.Description className="mt-1.5 text-xs text-muted-foreground">
-            配置 OpenAI 兼容服务端点，所有归档任务均共享此模型进行目录分类推荐。
-          </Dialog.Description>
-
-          {error && (
-            <div className="mt-3 rounded-md bg-red-50 p-2.5 text-xs text-red-800">
-              {error}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="mt-4 space-y-3.5">
-            <div>
-              <label className="text-xs font-medium text-foreground">API Base URL</label>
-              <input
-                name="llmBaseUrl"
-                defaultValue={llmConfig?.llmBaseUrl || ""}
-                placeholder="https://api.openai.com/v1 或内网兼容代理"
-                className={`mt-1 font-mono text-xs ${inputClass}`}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-medium text-foreground">Model Name</label>
-              <input
-                name="llmModel"
-                defaultValue={llmConfig?.llmModel || ""}
-                placeholder="例如 gpt-4o, claude-3-5-sonnet, deepseek-chat"
-                className={`mt-1 font-mono text-xs ${inputClass}`}
-              />
-            </div>
-
-            <div>
-              <label className="text-xs font-medium text-foreground">API Key</label>
-              <input
-                type="password"
-                name="llmApiKey"
-                placeholder={llmConfig?.llmApiKeyConfigured ? "已配置（留空保持不变）" : "sk-..."}
-                className={`mt-1 font-mono text-xs ${inputClass}`}
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-                取消
-              </Button>
-              <Button type="submit" size="sm" disabled={saving}>
-                {saving && <Loader2 className="mr-1.5 size-3.5 animate-spin" />}
-                保存全局配置
-              </Button>
-            </div>
-          </form>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // 知识库任务创建 / 编辑弹窗
 // ---------------------------------------------------------------------------
@@ -2229,4 +2082,3 @@ function DirectoryMigrationModal({
     </Dialog.Root>
   );
 }
-

@@ -63,13 +63,10 @@ export async function PATCH(request: Request) {
       confluenceUsername: text(body.confluenceUsername) || undefined,
       confluenceSecret: text(body.confluenceSecret) || undefined,
       targetWikiRoot,
-      llmBaseUrl: text(body.llmBaseUrl) || undefined,
-      llmApiKey: text(body.llmApiKey) || undefined,
-      llmModel: text(body.llmModel) || undefined,
       defaultOperatorName: text(body.defaultOperatorName) || "未填写",
     });
-    const { confluenceSecret, llmApiKey, ...publicConfig } = config;
-    return NextResponse.json({ ...publicConfig, confluenceSecretConfigured: Boolean(confluenceSecret), llmApiKeyConfigured: Boolean(llmApiKey) });
+    const { confluenceSecret, ...publicConfig } = config;
+    return NextResponse.json({ ...publicConfig, confluenceSecretConfigured: Boolean(confluenceSecret) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "保存配置失败" }, { status: 400 });
   }

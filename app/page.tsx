@@ -34,8 +34,34 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { TaskCalendar } from "@/components/task-calendar";
+import { AppSidebar } from "@/components/app-sidebar";
 import type { PublicBotConfig, ReminderSchedule, ReminderTask } from "@/lib/types";
 import { computeWeekPeriodInfo } from "@/lib/bots/weekly-report/period";
+
+type KnowledgeTaskSummary = {
+  id: string;
+  name: string;
+  description?: string;
+  config?: {
+    targetWikiRoot?: string;
+    confluenceBaseUrl?: string;
+  };
+  overview?: {
+    total: number;
+    counts: Record<string, number>;
+    jobs: Array<{ id: string; status: string; total: number; processed: number; failed: number }>;
+  };
+  treeNodeCount?: number;
+  notifyConfig?: {
+    enabled?: boolean;
+    botId?: string;
+    webhookUrl?: string;
+    dayOfWeek?: number;
+    time?: string;
+    sendMode?: string;
+    lastSentAt?: string;
+  };
+};
 
 type DashboardData = {
   schedules: ReminderSchedule[];
@@ -48,6 +74,42 @@ type DashboardData = {
 type View = "tasks" | "bots" | "history";
 type ToastState = { message: string; tone: "success" | "error"; seconds: number };
 type Confirmation = { type: "send" | "postpone"; task: ReminderTask };
+
+function getKnowledgeTaskStatus(task: KnowledgeTaskSummary): {
+  label: string;
+  variant: "success" | "secondary" | "warning" | "outline";
+  className?: string;
+} {
+  const isRunning = task.overview?.jobs?.some((j) => j.status === "running");
+  if (isRunning) {
+    return {
+      label: "迁移进行中",
+      variant: "outline",
+      className: "border-blue-500 text-blue-600 bg-blue-50/60",
+    };
+  }
+  const total = task.overview?.total ?? task.treeNodeCount ?? 0;
+  const counts = task.overview?.counts ?? {};
+  const migrated = counts.migrated ?? 0;
+  const failed = counts.failed ?? 0;
+
+  if (failed > 0) {
+    return { label: `有 ${failed} 项失败`, variant: "warning", className: "text-red-700 bg-red-50" };
+  }
+  if (task.notifyConfig) {
+    return {
+      label: task.notifyConfig.enabled ? "启用中" : "已停用",
+      variant: task.notifyConfig.enabled ? "success" : "secondary",
+    };
+  }
+  if (total > 0 && migrated >= total) {
+    return { label: "全部已归档", variant: "success" };
+  }
+  if (migrated > 0) {
+    return { label: "归档中", variant: "success" };
+  }
+  return { label: "已配置", variant: "secondary" };
+}
 
 const weekdays = ["", "每周一", "每周二", "每周三", "每周四", "每周五", "每周六", "每周日"];
 const dateFormat = new Intl.DateTimeFormat("zh-CN", {
@@ -87,6 +149,7 @@ const inputControlClass =
 
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardData>();
+  const [knowledgeTasks, setKnowledgeTasks] = useState<KnowledgeTaskSummary[]>([]);
   const [view, setView] = useState<View>("tasks");
   const [selectedScheduleId, setSelectedScheduleId] = useState<string>();
   const [editingSchedule, setEditingSchedule] = useState<ReminderSchedule>();
@@ -105,12 +168,30 @@ export default function DashboardPage() {
   const toastIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/dashboard", { cache: "no-store" });
-    setData(await res.json());
+    try {
+      const [dashRes, kmRes] = await Promise.all([
+        fetch("/api/dashboard", { cache: "no-store" }),
+        fetch("/api/knowledge-migrations/tasks", { cache: "no-store" }).catch(() => null),
+      ]);
+      if (dashRes.ok) {
+        setData(await dashRes.json());
+      }
+      if (kmRes && kmRes.ok) {
+        const kmData = (await kmRes.json()) as { tasks?: KnowledgeTaskSummary[] };
+        setKnowledgeTasks(kmData.tasks ?? []);
+      }
+    } catch (err) {
+      console.error("加载数据失败:", err);
+    }
   }, []);
 
   useEffect(() => {
     void load();
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const scheduleId = params.get("scheduleId");
+      if (scheduleId) setSelectedScheduleId(scheduleId);
+    }
   }, [load]);
 
   useEffect(() => {
@@ -375,6 +456,9 @@ export default function DashboardPage() {
   const activeSchedules = data?.schedules.filter((item) => item.enabled).length ?? 0;
   const botName = (id: string) => data?.bots.find((bot) => bot.id === id)?.name ?? "未指定机器人";
 
+  // 只展示有定时任务（已启用定时通知）的知识库任务
+  const scheduledKnowledgeTasks = knowledgeTasks.filter((kt) => Boolean(kt.notifyConfig?.enabled));
+
   // 本周执行计划
   const thisWeekTasks = (data?.tasks ?? []).filter((task) => isThisWeek(task.scheduledAt));
   const nextTask = data?.tasks[0];
@@ -385,66 +469,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* 侧边栏 */}
-      <aside className="fixed inset-y-0 w-60 border-r border-border bg-card px-3 py-6 select-none">
-        <div className="mb-8 flex items-center gap-2.5 px-3 text-sm font-semibold tracking-tight">
-          <span className="grid size-7 place-items-center rounded-md bg-foreground text-xs font-mono font-medium text-background">
-            F
-          </span>
-          <span>前端机器人</span>
-        </div>
-        <nav className="space-y-1 text-sm font-medium">
-          <button
-            type="button"
-            className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-              view === "tasks"
-                ? "bg-secondary text-foreground font-medium"
-                : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-            }`}
-            onClick={() => {
-              setView("tasks");
-              setSelectedScheduleId(undefined);
-            }}
-          >
-            <CalendarClock className="size-4" />
-            <span>定时任务</span>
-          </button>
-          <button
-            type="button"
-            className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-              view === "bots"
-                ? "bg-secondary text-foreground font-medium"
-                : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-            }`}
-            onClick={() => setView("bots")}
-          >
-            <Bot className="size-4" />
-            <span>机器人配置</span>
-          </button>
-          <button
-            type="button"
-            className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-              view === "history"
-                ? "bg-secondary text-foreground font-medium"
-                : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-            }`}
-            onClick={() => {
-              setView("history");
-              setSelectedScheduleId(undefined);
-            }}
-          >
-            <Send className="size-4" />
-            <span>发送记录</span>
-          </button>
-          <Link
-            href="/knowledge-migration"
-            className="flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <BookOpen className="size-4" />
-            <span>知识库归档</span>
-          </Link>
-        </nav>
-      </aside>
+      <AppSidebar />
 
       {/* 主内容区 */}
       <main className="ml-60 max-w-[1500px] p-8 lg:p-10">
@@ -464,60 +489,110 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {view === "tasks" ? (
-          selectedSchedule ? (
-            selectedSchedule.type === "weekly_report" || selectedSchedule.id.includes("weekly-report") ? (
-              /* 周报自动归档任务专属详情与设置视图 */
-              <WeeklyReportTaskDetailView
-                schedule={selectedSchedule}
-                bots={data?.bots ?? []}
-                botName={botName(selectedSchedule.botId)}
-                onBack={() => setSelectedScheduleId(undefined)}
-                onEdit={() => setEditingSchedule(selectedSchedule)}
-                onReload={load}
-                showToast={showToast}
-                onPostponeTask={requestPostponeTask}
-                postponingTaskId={postponingTaskId}
-                onResetPostponements={() => void resetPostponements(selectedSchedule.id)}
-                resettingPostponements={resettingPostponements}
-              />
-            ) : (
-              /* 周会主持提醒任务详情视图 */
-              <TaskDetailView
-                schedule={selectedSchedule}
-                tasks={selectedScheduleTasks}
-                botName={botName(selectedSchedule.botId)}
-                onBack={() => setSelectedScheduleId(undefined)}
-                onEdit={() => setEditingSchedule(selectedSchedule)}
-                onSync={() => void syncDoc(selectedSchedule.id)}
-                syncing={syncing}
-                onSendTask={requestSendNow}
-                onPostponeTask={requestPostponeTask}
-                postponingTaskId={postponingTaskId}
-                onResetPostponements={() => void resetPostponements(selectedSchedule.id)}
-                resettingPostponements={resettingPostponements}
-                onSetCurrentHost={(targetIndex) => handleSetCurrentHost(selectedSchedule.id, targetIndex)}
-                onReorderTasks={(newTasks) => handleReorderTasks(selectedSchedule.id, newTasks)}
-                reordering={reordering}
-                onResetOverrides={() => void handleResetOverrides(selectedSchedule.id)}
-                resettingOverrides={resettingOverrides}
-              />
-            )
+        {selectedSchedule ? (
+          selectedSchedule.type === "weekly_report" || selectedSchedule.id.includes("weekly-report") ? (
+            /* 周报自动归档任务专属详情与设置视图 */
+            <WeeklyReportTaskDetailView
+              schedule={selectedSchedule}
+              bots={data?.bots ?? []}
+              botName={botName(selectedSchedule.botId)}
+              onBack={() => setSelectedScheduleId(undefined)}
+              onEdit={() => setEditingSchedule(selectedSchedule)}
+              onReload={load}
+              showToast={showToast}
+              onPostponeTask={requestPostponeTask}
+              postponingTaskId={postponingTaskId}
+              onResetPostponements={() => void resetPostponements(selectedSchedule.id)}
+              resettingPostponements={resettingPostponements}
+            />
           ) : (
-            /* 一级主页面：任务列表 + 本周计划 */
-            <>
-              <div className="mb-8 flex items-start justify-between">
-                <div>
-                  <h1 className="text-2xl font-semibold tracking-tight">定时任务</h1>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    查看当前配置的定时提醒与自动归档任务，以及本周预计要触发的执行计划
-                  </p>
-                </div>
+            /* 周会主持提醒任务详情视图 */
+            <TaskDetailView
+              schedule={selectedSchedule}
+              tasks={selectedScheduleTasks}
+              botName={botName(selectedSchedule.botId)}
+              onBack={() => setSelectedScheduleId(undefined)}
+              onEdit={() => setEditingSchedule(selectedSchedule)}
+              onSync={() => void syncDoc(selectedSchedule.id)}
+              syncing={syncing}
+              onSendTask={requestSendNow}
+              onPostponeTask={requestPostponeTask}
+              postponingTaskId={postponingTaskId}
+              onResetPostponements={() => void resetPostponements(selectedSchedule.id)}
+              resettingPostponements={resettingPostponements}
+              onSetCurrentHost={(targetIndex) => handleSetCurrentHost(selectedSchedule.id, targetIndex)}
+              onReorderTasks={(newTasks) => handleReorderTasks(selectedSchedule.id, newTasks)}
+              reordering={reordering}
+              onResetOverrides={() => void handleResetOverrides(selectedSchedule.id)}
+              resettingOverrides={resettingOverrides}
+            />
+          )
+        ) : (
+          /* 一级主页面：顶部 Tab（任务与日历 / 发送记录） + 对应内容 */
+          <>
+            <div className="mb-8 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+              <div>
+                <h1 className="text-2xl font-semibold tracking-tight">定时任务</h1>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  查看当前配置的定时提醒与自动归档任务，以及本周预计要触发的执行计划
+                </p>
               </div>
+
+              <div className="flex items-center rounded-lg border border-border bg-secondary/40 p-1">
+                <button
+                  type="button"
+                  onClick={() => setView("tasks")}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    view === "tasks"
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <CalendarClock className="size-3.5" />
+                  <span>任务与日历</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView("history")}
+                  className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    view === "history"
+                      ? "bg-card text-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Send className="size-3.5" />
+                  <span>发送记录 ({data?.history.length ?? 0})</span>
+                </button>
+              </div>
+            </div>
+
+            {view === "history" ? (
+              <SendHistoryView records={data?.history ?? []} hideTitle />
+            ) : view === "bots" ? (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/20 p-4">
+                  <p className="text-sm text-muted-foreground">
+                    提示：飞书机器人配置已统一收敛至「系统设置」中。
+                  </p>
+                  <Link href="/settings?tab=bots">
+                    <Button size="sm">前往系统设置管理机器人</Button>
+                  </Link>
+                </div>
+                <BotManagement
+                  bots={data?.bots ?? []}
+                  editingBot={editingBot}
+                  saving={saving}
+                  onEdit={setEditingBot}
+                  onDelete={(bot) => void removeBot(bot)}
+                  onSave={saveBot}
+                />
+              </div>
+            ) : (
+              <>
 
               {/* 指标卡片 */}
               <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <Metric label="启用中的任务" value={String(activeSchedules)} />
+                <Metric label="启用中的任务" value={String(activeSchedules + scheduledKnowledgeTasks.length)} />
                 <Metric
                   label="本周预计执行"
                   value={thisWeekTasks.length > 0 ? `${thisWeekTasks.length} 次` : "本周已无待办"}
@@ -542,56 +617,105 @@ export default function DashboardPage() {
                   <CardTitle className="text-base font-semibold">已配置的任务列表</CardTitle>
                 </CardHeader>
                 <CardContent className="p-0">
-                  {(data?.schedules ?? []).length === 0 ? (
+                  {(data?.schedules ?? []).length === 0 && scheduledKnowledgeTasks.length === 0 ? (
                     <div className="py-8 text-center text-sm text-muted-foreground">暂无配置的任务</div>
                   ) : (
-                    (data?.schedules ?? []).map((schedule) => {
-                      const isWeeklyReport = schedule.type === "weekly_report" || schedule.id.includes("weekly-report");
-                      return (
-                        <div
-                          key={schedule.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => setSelectedScheduleId(schedule.id)}
-                          onKeyDown={(e) => e.key === "Enter" && setSelectedScheduleId(schedule.id)}
-                          className="group flex cursor-pointer items-center justify-between border-t border-border px-6 py-4.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/40 focus-visible:outline-none"
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="grid size-10 place-items-center rounded-lg bg-secondary text-foreground group-hover:bg-background">
-                              {isWeeklyReport ? (
-                                <FileSpreadsheet className="size-5" />
-                              ) : (
-                                <CalendarClock className="size-5" />
-                              )}
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-2.5 font-medium">
-                                <span className="text-base">{schedule.name}</span>
-                                <Badge variant={schedule.enabled ? "success" : "secondary"}>
-                                  {schedule.enabled ? "启用中" : "已停用"}
-                                </Badge>
-                                {isWeeklyReport && (
-                                  <Badge variant="outline" className="text-[10px]">
-                                    周报归档
-                                  </Badge>
+                    <>
+                      {(data?.schedules ?? []).map((schedule) => {
+                        const isWeeklyReport = schedule.type === "weekly_report" || schedule.id.includes("weekly-report");
+                        return (
+                          <div
+                            key={schedule.id}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSelectedScheduleId(schedule.id)}
+                            onKeyDown={(e) => e.key === "Enter" && setSelectedScheduleId(schedule.id)}
+                            className="group flex cursor-pointer items-center justify-between border-t border-border px-6 py-4.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/40 focus-visible:outline-none"
+                          >
+                            <div className="flex items-center gap-4">
+                              <div className="grid size-10 place-items-center rounded-lg bg-secondary text-foreground group-hover:bg-background">
+                                {isWeeklyReport ? (
+                                  <FileSpreadsheet className="size-5" />
+                                ) : (
+                                  <CalendarClock className="size-5" />
                                 )}
                               </div>
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                {isWeeklyReport ? (
-                                  `${weekdays[schedule.dayOfWeek]} ${schedule.time} · 归档目标：${schedule.targetFolderId ? "已配置" : "待配置"} · 模板源：${schedule.sourceDocumentId ? "已配置" : "待配置"}`
-                                ) : (
-                                  `${weekdays[schedule.dayOfWeek]} ${schedule.time} · 机器人：${botName(schedule.botId)} · 当前 ${schedule.rotation.length} 人轮值`
-                                )}
-                              </p>
+                              <div>
+                                <div className="flex items-center gap-2.5 font-medium">
+                                  <span className="text-base">{schedule.name}</span>
+                                  <Badge variant={schedule.enabled ? "success" : "secondary"}>
+                                    {schedule.enabled ? "启用中" : "已停用"}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px]">
+                                    {isWeeklyReport ? "周报归档" : "周会轮值"}
+                                  </Badge>
+                                </div>
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {isWeeklyReport ? (
+                                    `${weekdays[schedule.dayOfWeek]} ${schedule.time} · 机器人：${schedule.botId ? botName(schedule.botId) : "未指定机器人"} · 归档目标：${schedule.targetFolderId ? "已配置" : "待配置"} · 模板源：${schedule.sourceDocumentId ? "已配置" : "待配置"}`
+                                  ) : (
+                                    `${weekdays[schedule.dayOfWeek]} ${schedule.time} · 机器人：${botName(schedule.botId)} · 当前 ${schedule.rotation.length} 人轮值`
+                                  )}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground group-hover:text-foreground">
+                              <span>查看排期与详情</span>
+                              <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground group-hover:text-foreground">
-                            <span>查看排期与详情</span>
-                            <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-                          </div>
-                        </div>
-                      );
-                    })
+                        );
+                      })}
+
+                      {scheduledKnowledgeTasks.map((kt) => {
+                        const statusInfo = getKnowledgeTaskStatus(kt);
+                        const total = kt.overview?.total ?? kt.treeNodeCount ?? 0;
+                        const migrated = kt.overview?.counts?.migrated ?? 0;
+                        const pending = kt.overview?.counts?.pending ?? 0;
+
+                        const cycleText = kt.notifyConfig?.dayOfWeek && kt.notifyConfig.time
+                          ? `${weekdays[kt.notifyConfig.dayOfWeek]} ${kt.notifyConfig.time}`
+                          : "定时推送";
+
+                        const botText = kt.notifyConfig?.botId
+                          ? botName(kt.notifyConfig.botId)
+                          : kt.notifyConfig?.webhookUrl
+                            ? "自定义 Webhook"
+                            : "未指定机器人";
+
+                        return (
+                          <Link
+                            key={kt.id}
+                            href={`/knowledge-migration?taskId=${kt.id}`}
+                            className="group flex cursor-pointer items-center justify-between border-t border-border px-6 py-4.5 transition-colors hover:bg-secondary/40 focus-visible:bg-secondary/40 focus-visible:outline-none"
+                          >
+                            <div className="flex items-center gap-4">
+                              <div className="grid size-10 place-items-center rounded-lg bg-secondary text-foreground group-hover:bg-background">
+                                <BookOpen className="size-5" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2.5 font-medium">
+                                  <span className="text-base">{kt.name || "前端知识库团队迁移"}</span>
+                                  <Badge variant={statusInfo.variant} className={statusInfo.className}>
+                                    {statusInfo.label}
+                                  </Badge>
+                                  <Badge variant="outline" className="text-[10px]">
+                                    知识库归档
+                                  </Badge>
+                                </div>
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {`${cycleText} · 机器人：${botText} · 归档进度：${migrated}/${total} 篇已完成${pending > 0 ? ` · 待处理 ${pending} 篇` : ""}`}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground group-hover:text-foreground">
+                              <span>查看排期与详情</span>
+                              <ChevronRight className="size-4 transition-transform group-hover:translate-x-0.5" />
+                            </div>
+                          </Link>
+                        );
+                      })}
+                    </>
                   )}
                 </CardContent>
               </Card>
@@ -633,7 +757,21 @@ export default function DashboardPage() {
                         <tbody className="divide-y divide-border">
                           {thisWeekTasks.map((task) => {
                             const isDue = new Date(task.scheduledAt).getTime() <= Date.now();
-                            const isWeeklyReport = task.scheduleId.includes("weekly-report") || task.host.name === "系统自动";
+                            const isKnowledgeMigration = task.scheduleId.startsWith("knowledge-migration:");
+                            const kmTaskId = isKnowledgeMigration ? task.scheduleId.replace("knowledge-migration:", "") : null;
+                            const kmTask = kmTaskId ? knowledgeTasks.find((kt) => kt.id === kmTaskId) : null;
+                            const isWeeklyReport = !isKnowledgeMigration && (task.scheduleId.includes("weekly-report") || task.host.name === "系统自动");
+
+                            const assignedBotId = isKnowledgeMigration
+                              ? kmTask?.notifyConfig?.botId
+                              : data?.schedules.find((item) => item.id === task.scheduleId)?.botId;
+
+                            const botDisplayName = assignedBotId
+                              ? botName(assignedBotId)
+                              : isKnowledgeMigration && kmTask?.notifyConfig?.webhookUrl
+                                ? "自定义 Webhook"
+                                : "未指定机器人";
+
                             return (
                               <tr key={task.id} className="transition-colors hover:bg-secondary/30">
                                 <td className="px-6 py-4 font-mono text-xs tabular-nums text-foreground font-medium">
@@ -646,10 +784,14 @@ export default function DashboardPage() {
                                 </td>
                                 <td className="px-6 py-4 font-medium">{task.scheduleName}</td>
                                 <td className="px-6 py-4 text-muted-foreground">
-                                  {botName(data?.schedules.find((item) => item.id === task.scheduleId)?.botId ?? "")}
+                                  {botDisplayName}
                                 </td>
                                 <td className="px-6 py-4">
-                                  {isWeeklyReport ? (
+                                  {isKnowledgeMigration ? (
+                                    <Badge variant="outline" className="text-[11px] font-normal text-indigo-600 border-indigo-200 bg-indigo-50/50">
+                                      知识库周报推送
+                                    </Badge>
+                                  ) : isWeeklyReport ? (
                                     <Badge variant="outline" className="text-[11px] font-normal">
                                       周报自动归档
                                     </Badge>
@@ -659,13 +801,15 @@ export default function DashboardPage() {
                                 </td>
                               <td className="px-6 py-4 text-right">
                                 <div className="flex justify-end gap-1">
-                                  <Button variant="ghost" size="sm" onClick={() => requestPostponeTask(task)} disabled={postponingTaskId === task.id}>
-                                    <CalendarPlus className="size-3.5" />
-                                    <span>{postponingTaskId === task.id ? "延期中…" : "延期到下周"}</span>
-                                  </Button>
+                                  {!isKnowledgeMigration && (
+                                    <Button variant="ghost" size="sm" onClick={() => requestPostponeTask(task)} disabled={postponingTaskId === task.id}>
+                                      <CalendarPlus className="size-3.5" />
+                                      <span>{postponingTaskId === task.id ? "延期中…" : "延期到下周"}</span>
+                                    </Button>
+                                  )}
                                   <Button variant="ghost" size="sm" onClick={() => requestSendNow(task)}>
                                     <Send className="size-3.5" />
-                                    <span>{isWeeklyReport ? "立即执行" : "立即发送"}</span>
+                                    <span>{isKnowledgeMigration || isWeeklyReport ? "立即执行" : "立即发送"}</span>
                                   </Button>
                                 </div>
                               </td>
@@ -679,34 +823,9 @@ export default function DashboardPage() {
                 </CardContent>
               </Card>
             </>
-          )
-        ) : view === "bots" ? (
-          /* 机器人管理视图 */
-          <>
-            <div className="mb-8 flex items-start justify-between">
-              <div>
-                <h1 className="text-2xl font-semibold tracking-tight">机器人配置</h1>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  一个机器人对应一个飞书群 Webhook，可被多个定时任务复用
-                </p>
-              </div>
-              <Button size="sm" onClick={() => setEditingBot("new")}>
-                <Plus className="size-3.5" />
-                <span>添加机器人</span>
-              </Button>
-            </div>
-            <BotManagement
-              bots={data?.bots ?? []}
-              editingBot={editingBot}
-              saving={saving}
-              onEdit={setEditingBot}
-              onDelete={(bot) => void removeBot(bot)}
-              onSave={saveBot}
-            />
-          </>
-        ) : (
-          <SendHistoryView records={data?.history ?? []} />
-        )}
+          )}
+        </>
+      )}
 
         {editingSchedule && (
           <Dialog.Root open onOpenChange={(open) => !open && setEditingSchedule(undefined)}>
@@ -796,7 +915,12 @@ export default function DashboardPage() {
                     </label>
 
                     <label className="grid gap-2 font-medium sm:col-span-2">
-                      <span>关联通知机器人（生成后发送飞书群提醒，可选）</span>
+                      <div className="flex items-center justify-between">
+                        <span>关联通知机器人（生成后发送飞书群提醒，可选）</span>
+                        <Link href="/settings?tab=bots" className="text-xs font-normal text-muted-foreground hover:text-foreground">
+                          配置机器人 →
+                        </Link>
+                      </div>
                       <select
                         className={inputControlClass}
                         name="botId"
@@ -850,7 +974,12 @@ export default function DashboardPage() {
                       />
                     </label>
                     <label className="grid gap-2 font-medium sm:col-span-2">
-                      <span>发送机器人</span>
+                      <div className="flex items-center justify-between">
+                        <span>发送机器人</span>
+                        <Link href="/settings?tab=bots" className="text-xs font-normal text-muted-foreground hover:text-foreground">
+                          配置机器人 →
+                        </Link>
+                      </div>
                       <select
                         className={inputControlClass}
                         name="botId"
@@ -887,7 +1016,7 @@ export default function DashboardPage() {
                 )}
                 <p className="mt-4 text-xs leading-5 text-muted-foreground">
                   {editingSchedule.type === "weekly_report" || editingSchedule.id.includes("weekly-report")
-                    ? "周报规则：每次执行自动拉取源模板内容，并在目标知识库按 年/月/周报 目录结构自动归档。"
+                    ? "周报规则：每次执行自动拉取源模板内容，并在目标知识库按 年份工作汇总/月份/周报 目录结构自动归档。"
                     : "轮值来源：飞书文档/表格。点击“同步飞书名单”后自动刷新最新人员排期。"}
                 </p>
                 <div className="mt-6 flex justify-end gap-2.5 border-t border-border pt-4">
@@ -1507,7 +1636,7 @@ function BotManagement({
   );
 }
 
-function SendHistoryView({ records }: { records: ReminderTask[] }) {
+function SendHistoryView({ records, hideTitle }: { records: ReminderTask[]; hideTitle?: boolean }) {
   const sortedRecords = [...records].sort((a, b) => {
     const aTime = a.sentAt ? new Date(a.sentAt).getTime() : 0;
     const bTime = b.sentAt ? new Date(b.sentAt).getTime() : 0;
@@ -1516,10 +1645,12 @@ function SendHistoryView({ records }: { records: ReminderTask[] }) {
 
   return (
     <div>
-      <div className="mb-8">
-        <h1 className="text-2xl font-semibold tracking-tight">发送记录</h1>
-                <p className="mt-1 text-sm text-muted-foreground">查看提醒发送时间、触发方式、消息内容及使用的机器人信息</p>
-      </div>
+      {!hideTitle && (
+        <div className="mb-8">
+          <h1 className="text-2xl font-semibold tracking-tight">发送记录</h1>
+          <p className="mt-1 text-sm text-muted-foreground">查看提醒发送时间、触发方式、消息内容及使用的机器人信息</p>
+        </div>
+      )}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base font-semibold">历史发送记录</CardTitle>
@@ -1848,8 +1979,8 @@ function WeeklyReportTaskDetailView({
           <p>每次执行时，系统会自动在设定的「目标知识库根目录」下按以下规则检查并递归创建：</p>
           <div className="rounded-md border border-border bg-card p-3 font-mono text-[12px] text-foreground">
             <div>📁 目标知识库根目录</div>
-            <div className="ml-4 text-muted-foreground">└─ 📁 {periodPreview.yearName}（如 2026年）</div>
-            <div className="ml-8 text-muted-foreground">└─ 📁 {periodPreview.monthName}（如 9月）</div>
+            <div className="ml-4 text-muted-foreground">└─ 📁 {periodPreview.yearName}（如 2026工作汇总）</div>
+            <div className="ml-8 text-muted-foreground">└─ 📁 {periodPreview.monthName}（如 202609）</div>
             <div className="ml-12 text-foreground font-medium">└─ 📄 {periodPreview.weekTitle}（复制源模板内容）</div>
           </div>
           <p>

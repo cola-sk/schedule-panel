@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { deleteTask, getPublicTaskConfig, getTask, getTaskItem, getTaskItems, persistMigrationState, setActiveTask, updateTask } from "@/lib/knowledge-migration/store";
 import { getTaskOverview } from "@/lib/knowledge-migration/service";
+import { getNextMigrationStatsRunAt } from "@/lib/knowledge-migration/notifier";
 import { getPage, isContentEmpty, refreshWikiTreeProgress } from "@/lib/knowledge-migration/confluence";
 import { taxonomyFromDirectories, type ConfluenceAuthType, type ItemFilters } from "@/lib/knowledge-migration/types";
 
@@ -70,6 +71,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         targetDirectories: directories,
         taxonomy,
         overview: getTaskOverview(task.id),
+        notifySchedule: task.notifyConfig
+          ? {
+              enabled: task.notifyConfig.enabled,
+              dayOfWeek: task.notifyConfig.dayOfWeek,
+              time: task.notifyConfig.time,
+              lastSentAt: task.notifyConfig.lastSentAt,
+              nextRunAt: getNextMigrationStatsRunAt(task.notifyConfig),
+            }
+          : undefined,
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       },

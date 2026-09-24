@@ -1,13 +1,14 @@
 export interface WeekPeriodInfo {
-  yearName: string; // e.g. "2026年"
-  monthName: string; // e.g. "9月"
-  weekTitle: string; // e.g. "9月21日 - 9月25日"
+  yearName: string; // e.g. "2026工作汇总"
+  monthName: string; // e.g. "202609"
+  weekTitle: string; // e.g. "2026-09-21~2026-09-25"
   monday: Date;
   friday: Date;
 }
 
 /**
- * 根据指定基准日期（上海时区）推算当周的年份、月份和周报标题（x月x日 - x月x日）
+ * 根据指定基准日期（上海时区）推算周报归档目录和标题。
+ * 目录结构：年份工作汇总 / YYYYMM / YYYY-MM-DD~YYYY-MM-DD
  */
 export function computeWeekPeriodInfo(dateInput: Date | string): WeekPeriodInfo {
   const date = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
@@ -38,9 +39,10 @@ export function computeWeekPeriodInfo(dateInput: Date | string): WeekPeriodInfo 
   const friMonth = parseInt(friParts.month, 10);
   const friDay = parseInt(friParts.day, 10);
 
-  const yearName = `${monParts.year}年`;
-  const monthName = `${monMonth}月`;
-  const weekTitle = `${monMonth}月${monDay}日 - ${friMonth}月${friDay}日`;
+  // 跨月周按周报结束日归档，确保 8 月 31 日～9 月 4 日进入 202609。
+  const yearName = `${friParts.year}工作汇总`;
+  const monthName = `${friParts.year}${friParts.month}`;
+  const weekTitle = `${monParts.year}-${monParts.month}-${monParts.day}~${friParts.year}-${friParts.month}-${friParts.day}`;
 
   return {
     yearName,

@@ -369,7 +369,7 @@ export async function sendTaskReminder(
 
   if (!botDef || !botDef.buildMessage) throw new Error(`未找到机器人业务模版: ${bot.id}`);
 
-  const payload = botDef.buildMessage({
+  const payload = await botDef.buildMessage({
     host: task.host,
     schedule,
     bot,

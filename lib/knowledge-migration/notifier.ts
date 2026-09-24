@@ -14,7 +14,72 @@ import {
   saveTaskNotifyConfig,
 } from "./store";
 import type { TaskMigrationStats } from "./types";
-import type { FeishuMessagePayload } from "@/lib/core/types";
+import type { FeishuMessagePayload, ReminderTask } from "@/lib/core/types";
+import type { TaskNotifyConfig } from "./types";
+
+/**
+ * 计算统计通知下一次应执行的时间。该结果与定时派发器的按周、按北京时间规则一致，
+ * 仅用于向页面展示计划；真正的发送仍由 Cron 派发入口负责。
+ */
+export function getNextMigrationStatsRunAt(config?: TaskNotifyConfig, now = new Date()): string | undefined {
+  if (!config?.enabled) return undefined;
+
+  const dayOfWeek = Number(config.dayOfWeek);
+  const time = config.time || "18:00";
+  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 1 || dayOfWeek > 7 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+    return undefined;
+  }
+
+  const todayAtScheduledTime = atShanghaiLocal(now, time);
+  let daysUntilRun = dayOfWeek - chinaWeekday(now);
+  if (daysUntilRun < 0 || (daysUntilRun === 0 && todayAtScheduledTime.getTime() <= now.getTime())) {
+    daysUntilRun += 7;
+  }
+
+  let nextRun = new Date(todayAtScheduledTime.getTime() + daysUntilRun * 24 * 60 * 60 * 1000);
+  if (config.lastSentAt && chinaDateKey(new Date(config.lastSentAt)) === chinaDateKey(nextRun)) {
+    nextRun = new Date(nextRun.getTime() + 7 * 24 * 60 * 60 * 1000);
+  }
+
+  return nextRun.toISOString();
+}
+
+/**
+ * 生成指定区间内的知识库统计通知日历项。
+ * 只展示当前时刻之后的执行计划，计算规则与 Cron 派发使用的规则保持一致。
+ */
+export function migrationStatsTasksBetween(start: Date, end: Date, now = new Date()): ReminderTask[] {
+  if (start.getTime() > end.getTime() || end.getTime() < now.getTime()) return [];
+
+  const baseline = new Date(Math.max(now.getTime(), start.getTime() - 1));
+  const calendarTasks: ReminderTask[] = [];
+
+  for (const task of getTasks()) {
+    if (!task.notifyConfig?.enabled) continue;
+    const firstRunAt = getNextMigrationStatsRunAt(task.notifyConfig, baseline);
+    if (!firstRunAt) continue;
+
+    let occurrence = new Date(firstRunAt);
+    let guard = 0;
+    while (occurrence.getTime() <= end.getTime() && guard < 20) {
+      guard += 1;
+      if (occurrence.getTime() >= start.getTime()) {
+        calendarTasks.push({
+          id: `knowledge-migration:${task.id}:${occurrence.toISOString()}`,
+          scheduleId: `knowledge-migration:${task.id}`,
+          scheduleName: `知识库周报 · ${task.name}`,
+          host: { name: "系统自动" },
+          scheduledAt: occurrence.toISOString(),
+          status: "pending",
+          content: "生成知识库归档统计并发送飞书通知",
+        });
+      }
+      occurrence = new Date(occurrence.getTime() + 7 * 24 * 60 * 60 * 1000);
+    }
+  }
+
+  return calendarTasks.sort((left, right) => left.scheduledAt.localeCompare(right.scheduledAt));
+}
 
 /**
  * 构造知识库归档与文档沉淀周报飞书卡片

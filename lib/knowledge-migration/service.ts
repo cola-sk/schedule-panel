@@ -1,13 +1,13 @@
 import "server-only";
 import pLimit from "p-limit";
 import { updateDocumentContent } from "@/lib/mcp/feishu-doc-engine";
+import { getAIModelConfig } from "@/lib/ai-config/store";
 import { classifyDocument } from "./classifier";
 import { buildWikiTree, fetchWikiHierarchy, getPage, isContentEmpty, listDescendantPages, refreshWikiTreeProgress, storageXhtmlToMarkdown, toSourceDocument } from "./confluence";
 import { createMigratedWikiDocument, loadWikiDestination, checkWikiNodeExists, type FeishuDocNode, type WikiDestination } from "./feishu";
 import {
   addTaskAuditLog,
   createTaskJob,
-  getLLMConfig,
   getTask,
   getTaskItem,
   getTaskItems,
@@ -271,7 +271,7 @@ async function scanOneTaskPage(
     return;
   }
 
-  const llmConfig = getLLMConfig();
+  const llmConfig = getAIModelConfig();
   const suggestion = await classifyDocument(llmConfig, source, markdown, taxonomy);
 
   upsertTaskScannedItem(taskId, {

@@ -151,6 +151,19 @@ export function TaskCalendar({
     setCursor(today);
   }
 
+  function isKnowledgeMigrationTask(task: ReminderTask) {
+    return task.scheduleId.startsWith("knowledge-migration:");
+  }
+
+  function openTask(task: ReminderTask) {
+    if (isKnowledgeMigrationTask(task)) {
+      const taskId = task.scheduleId.replace("knowledge-migration:", "");
+      window.location.assign(`/knowledge-migration?taskId=${taskId}`);
+      return;
+    }
+    onOpenSchedule(task.scheduleId);
+  }
+
   return (
     <CardShell>
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
@@ -207,18 +220,20 @@ export function TaskCalendar({
                               ? "border-dashed border-border/80 bg-secondary/30 text-muted-foreground hover:bg-secondary/50"
                               : "border-border/80 bg-card hover:border-foreground/30 hover:bg-secondary/40"
                           }`}
-                          title={`${task.scheduleName} · ${task.host.name}，点击查看详情`}
-                          onClick={() => onOpenSchedule(task.scheduleId)}
+                          title={`${task.scheduleName} · ${isKnowledgeMigrationTask(task) ? "知识库统计通知" : task.host.name}，点击查看详情`}
+                          onClick={() => openTask(task)}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault();
-                              onOpenSchedule(task.scheduleId);
+                              openTask(task);
                             }
                           }}
                         >
                           <div className="truncate font-medium">{task.scheduleName}</div>
                           <div className="truncate text-muted-foreground">
-                            {task.status === "postponed"
+                            {isKnowledgeMigrationTask(task)
+                              ? `${taskTime(task.scheduledAt)} · 知识库统计`
+                              : task.status === "postponed"
                               ? "本期已延期"
                               : task.host.name === "系统自动" || task.scheduleId.includes("weekly-report")
                               ? `${taskTime(task.scheduledAt)} · 自动归档`
@@ -226,7 +241,11 @@ export function TaskCalendar({
                           </div>
                           <div className="mt-1 flex items-center justify-between gap-1">
                             <span className="text-[10px] text-muted-foreground group-hover:text-foreground">查看详情</span>
-                            {task.status === "sent" ? (
+                            {isKnowledgeMigrationTask(task) ? (
+                              <Badge variant="outline" className="px-1 py-0 text-[9px] font-normal text-indigo-600">
+                                归档周报
+                              </Badge>
+                            ) : task.status === "sent" ? (
                               <Badge variant="success" className="px-1 py-0 text-[9px] font-normal">
                                 已发送
                               </Badge>
