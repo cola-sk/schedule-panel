@@ -4,10 +4,11 @@ import path from "path";
 import pLimit from "p-limit";
 import { getFeishuClient, parseDocumentTarget, formatLarkError } from "@/lib/mcp/feishu-doc-engine";
 import { addTaskAuditLog, getTask, saveTaskMigrationStats, persistMigrationState } from "./store";
-import { atShanghaiLocal, chinaWeekday } from "@/lib/core/scheduler";
+import { atShanghaiLocal, chinaDateKey, chinaWeekday } from "@/lib/core/scheduler";
 import type {
   CycleStatsResult,
   FeishuFullDocItem,
+  KnowledgeDirectory,
   KnowledgeMigrationTask,
   MigrationDocOrigin,
   MigrationPersonStat,
@@ -516,7 +517,7 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
 }
 
 /**
- * 根据指定周期模式（上个自然周、到今天为止前七天、本自然周）计算该周期的文档贡献榜及统计数据
+ * 根据指定周期计算文档贡献榜及统计数据
  */
 export function computeCycleStats(
   stats: TaskMigrationStats,
@@ -525,9 +526,8 @@ export function computeCycleStats(
 ): CycleStatsResult {
   const weekday = chinaWeekday(now); // 1: Mon ... 7: Sun
   const todayMidnight = atShanghaiLocal(now, "00:00");
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const formatDate = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const formatShort = (d: Date) => `${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+  const formatDate = chinaDateKey;
+  const formatShort = (d: Date) => chinaDateKey(d).slice(5).replace("-", "/");
 
   let startTime: Date;
   let endTime: Date;
@@ -535,7 +535,13 @@ export function computeCycleStats(
   let cycleTitle = "";
   let cycleLabel = "";
 
-  if (cycleType === "last_week") {
+  if (cycleType === "yesterday") {
+    startTime = new Date(todayMidnight.getTime() - 86400000);
+    endTime = new Date(todayMidnight.getTime() - 1);
+    cycleShortLabel = "昨日";
+    cycleTitle = "前一天";
+    cycleLabel = `前一天 (${formatShort(startTime)})`;
+  } else if (cycleType === "last_week") {
     // 上个自然周：上周一 00:00 至 上周日 23:59:59
     const thisMonday = new Date(todayMidnight.getTime() - (weekday - 1) * 86400000);
     startTime = new Date(thisMonday.getTime() - 7 * 86400000);
@@ -627,3 +633,76 @@ export function computeCycleStats(
   };
 }
 
+export interface SubdirectoryStat {
+  name: string;
+  totalCount: number;
+  cycleCount: number;
+}
+
+export interface DirectoryStat {
+  name: string;
+  subdirectories: SubdirectoryStat[];
+  totalCount: number;
+  cycleCount: number;
+}
+
+/** 统计两个重点目录中各子目录的非 Wiki 文档，周期增量与贡献榜使用相同的文档集合。 */
+export function computeSubdirectoryStats(
+  stats: TaskMigrationStats,
+  directories: KnowledgeDirectory[],
+  cycleStats: CycleStatsResult,
+): DirectoryStat[] {
+  const focusedDirectories = [
+    ["业务子方向", "业务方向"],
+    ["基础库与通用能力", "基础库与能力"],
+  ];
+  const allItems = stats.weeks.flatMap((week) => week.items);
+  const itemByToken = new Map(allItems.map((item) => [item.nodeToken, item]));
+
+  return focusedDirectories.map((aliases) => {
+    const directory = directories.find((item) => aliases.includes(item.title));
+    const name = aliases[0];
+    const knownChildren = new Map(directory?.children.map((child) => [child.nodeToken, child.title]) || []);
+
+    const getChildName = (item: FeishuFullDocItem): string | undefined => {
+      if (!directory) {
+        return aliases.includes(item.primaryCategory || "") ? item.secondaryCategory : undefined;
+      }
+      let current: FeishuFullDocItem | undefined = item;
+      let depth = 0;
+      while (current?.parentNodeToken && depth++ < 30) {
+        if (current.parentNodeToken === directory.nodeToken) {
+          // 一级目录的直属文档与子目录节点本身不属于“子目录内的文档”。
+          return current === item ? undefined : knownChildren.get(current.nodeToken) || current.title;
+        }
+        current = itemByToken.get(current.parentNodeToken);
+      }
+      return undefined;
+    };
+
+    const countByChild = (items: FeishuFullDocItem[]) => {
+      const counts = new Map<string, number>();
+      for (const item of items) {
+        if (item.origin !== "external_feishu") continue;
+        const childName = getChildName(item);
+        if (childName) counts.set(childName, (counts.get(childName) || 0) + 1);
+      }
+      return counts;
+    };
+    const totals = countByChild(allItems);
+    const cycle = countByChild(cycleStats.items);
+    const childNames = new Set([...knownChildren.values(), ...totals.keys()]);
+    const subdirectories = [...childNames].map((childName) => ({
+      name: childName,
+      totalCount: totals.get(childName) || 0,
+      cycleCount: cycle.get(childName) || 0,
+    })).sort((a, b) => b.cycleCount - a.cycleCount || b.totalCount - a.totalCount || a.name.localeCompare(b.name, "zh-CN"));
+
+    return {
+      name,
+      subdirectories,
+      totalCount: subdirectories.reduce((sum, child) => sum + child.totalCount, 0),
+      cycleCount: subdirectories.reduce((sum, child) => sum + child.cycleCount, 0),
+    };
+  });
+}

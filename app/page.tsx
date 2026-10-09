@@ -797,7 +797,7 @@ export default function DashboardPage() {
                                 <td className="px-6 py-4">
                                   {isKnowledgeMigration ? (
                                     <Badge variant="outline" className="text-[11px] font-normal text-indigo-600 border-indigo-200 bg-indigo-50/50">
-                                      知识库周报推送
+                                      知识库统计推送
                                     </Badge>
                                   ) : isWeeklyReport ? (
                                     <Badge variant="outline" className="text-[11px] font-normal">

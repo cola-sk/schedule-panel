@@ -25,6 +25,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       enabled: false,
       botId: defaultBotId,
       webhookUrl: "",
+      frequency: "weekly",
       dayOfWeek: 5, // 默认周五
       time: "18:00", // 默认下午6点
       sendMode: "both",
@@ -61,19 +62,28 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       enabled: false,
       botId: "",
       webhookUrl: "",
+      frequency: "weekly",
       dayOfWeek: 5,
       time: "18:00",
       sendMode: "both",
       cycleType: "this_week",
     };
 
+    const frequency = body.frequency === "daily" || body.frequency === "weekly"
+      ? body.frequency
+      : prevConfig.frequency || "weekly";
     const nextConfig: TaskNotifyConfig = {
       enabled: body.enabled !== undefined ? Boolean(body.enabled) : prevConfig.enabled,
       botId: body.botId !== undefined ? body.botId.trim() : prevConfig.botId,
       webhookUrl: body.webhookUrl !== undefined ? body.webhookUrl.trim() : prevConfig.webhookUrl,
+      frequency,
       dayOfWeek: body.dayOfWeek !== undefined ? Number(body.dayOfWeek) : prevConfig.dayOfWeek,
       time: body.time !== undefined ? body.time.trim() : prevConfig.time,
-      cycleType: body.cycleType || prevConfig.cycleType || "this_week",
+      cycleType: frequency === "daily"
+        ? "yesterday"
+        : body.cycleType && body.cycleType !== "yesterday"
+          ? body.cycleType
+          : prevConfig.cycleType === "yesterday" ? "this_week" : prevConfig.cycleType || "this_week",
       sendMode: body.sendMode || prevConfig.sendMode || "both",
       lastSentAt: prevConfig.lastSentAt,
     };

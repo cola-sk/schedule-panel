@@ -3,7 +3,7 @@ import pLimit from "p-limit";
 import { updateDocumentContent } from "@/lib/mcp/feishu-doc-engine";
 import { getAIModelConfig } from "@/lib/ai-config/store";
 import { classifyDocument } from "./classifier";
-import { buildWikiTree, fetchWikiHierarchy, getPage, isContentEmpty, listDescendantPages, refreshWikiTreeProgress, storageXhtmlToMarkdown, toSourceDocument } from "./confluence";
+import { buildWikiTree, downloadConfluenceImages, fetchWikiHierarchy, getPage, isContentEmpty, listDescendantPages, refreshWikiTreeProgress, storageXhtmlToMarkdown, storageXhtmlToMigratableMarkdown, toSourceDocument } from "./confluence";
 import { createMigratedWikiDocument, loadWikiDestination, checkWikiNodeExists, type FeishuDocNode, type WikiDestination } from "./feishu";
 import {
   addTaskAuditLog,
@@ -528,7 +528,11 @@ async function publishOneTaskItem(
 
   try {
     const page = await getPage(task.config, item.source.pageId);
-    const markdown = storageXhtmlToMarkdown(page.body?.storage?.value || "");
+    const storageXhtml = page.body?.storage?.value || "";
+    // Keep scan/change detection text-only and stable, but retain image
+    // placeholders for the actual publishing path below.
+    const markdown = storageXhtmlToMarkdown(storageXhtml);
+    const migrationContent = storageXhtmlToMigratableMarkdown(storageXhtml);
     const latestSource = toSourceDocument(task.config, page, markdown);
 
     if (
@@ -551,6 +555,8 @@ async function publishOneTaskItem(
       }
     }
 
+    const imageAssets = await downloadConfluenceImages(task.config, page.id, migrationContent.images);
+
     // 若已记录有效 targetNodeToken，先检查是否已存在于飞书，若存在则直接全量更新正文与标题
     if (item.targetNodeToken) {
       let origin = "https://open.feishu.cn";
@@ -563,9 +569,13 @@ async function publishOneTaskItem(
         (await checkWikiNodeExists(destination.spaceId, item.targetNodeToken, origin));
       if (existing) {
         try {
-          await updateDocumentContent(existing.documentToken, `${provenanceMarkdown(item, operator)}${markdown}`, { title: item.finalTitle });
+          await updateDocumentContent(existing.documentToken, `${provenanceMarkdown(item, operator)}${migrationContent.markdown}`, {
+            title: item.finalTitle,
+            images: imageAssets,
+          });
         } catch (updateErr) {
           console.warn("更新已有飞书文档内容警告:", updateErr);
+          if (imageAssets.size) throw updateErr;
         }
         updateTaskItem(taskId, item.wikiId, {
           status: "migrated",
@@ -615,7 +625,8 @@ async function publishOneTaskItem(
       secondaryCategory: item.finalSecondaryCategory,
       parentNodeToken,
       title: item.finalTitle,
-      markdown: `${provenanceMarkdown(item, operator)}${markdown}`,
+      markdown: `${provenanceMarkdown(item, operator)}${migrationContent.markdown}`,
+      images: imageAssets,
     });
 
     updateTaskItem(taskId, item.wikiId, {

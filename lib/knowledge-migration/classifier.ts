@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { AIModelConfig } from "@/lib/ai-config/store";
 import {
   isValidCategory,
+  type OtherDirectoryRecommendation,
   resolveCategory,
   type CategorySuggestion,
   type DynamicTaxonomy,
@@ -13,6 +14,17 @@ import {
 const resultSchema = z.object({
   primaryCategory: z.string().optional().default(""),
   secondaryCategory: z.string().optional().default(""),
+  confidence: z.coerce.number().min(0).max(1).optional().default(0.8),
+  reason: z.string().max(400).optional().default(""),
+  summary: z.string().max(500).optional().default(""),
+});
+
+const otherDirectoryResultSchema = z.object({
+  targetKind: z.enum(["existing_directory", "new_directory"]).optional().default("existing_directory"),
+  primaryCategory: z.string().optional().default(""),
+  secondaryCategory: z.string().optional().default(""),
+  newDirectoryParent: z.string().optional().default(""),
+  newDirectoryName: z.string().max(80).optional().default(""),
   confidence: z.coerce.number().min(0).max(1).optional().default(0.8),
   reason: z.string().max(400).optional().default(""),
   summary: z.string().max(500).optional().default(""),
@@ -135,5 +147,84 @@ ${taxonomyText}
     };
   } catch (error) {
     return { error: error instanceof Error ? `LLM 分类失败：${error.message}` : "LLM 分类失败" };
+  }
+}
+
+export async function recommendOtherDirectoryDocument(
+  llmConfig: AIModelConfig,
+  source: Pick<SourceDocument, "title" | "path">,
+  markdown: string,
+  taxonomy: DynamicTaxonomy,
+): Promise<OtherDirectoryRecommendation> {
+  if (!llmConfig.llmBaseUrl || !llmConfig.llmApiKey || !llmConfig.llmModel) {
+    return { targetKind: "existing_directory", error: "未配置 LLM，无法生成迁移目录建议" };
+  }
+
+  const taxonomyText = Object.entries(taxonomy)
+    .map(([primary, secondaries]) => `- ${primary}${secondaries.length ? `：${secondaries.join("、")}` : "（可直接放入该目录）"}`)
+    .join("\n");
+  if (!taxonomyText) return { targetKind: "existing_directory", error: "目标飞书知识库未读取到可用目录" };
+
+  const maxExcerpt = 3000;
+  const excerpt = markdown.length <= maxExcerpt
+    ? markdown
+    : `${markdown.slice(0, 2200)}\n\n…（正文中间内容已省略，原文共 ${markdown.length} 字）…\n\n${markdown.slice(-800)}`;
+
+  const systemPrompt = `你是技术知识库信息架构师。请将“其他”目录中的文档归入现有目标目录，或在没有任何合适目录时提出一个最小的新目录建议。
+
+### 现有目标目录（只能使用这里列出的名称）
+${taxonomyText}
+
+### 决策规则
+1. 优先使用现有目录。targetKind 为 existing_directory 时，primaryCategory 必须是现有一级目录，secondaryCategory 必须为空或是该一级目录下真实存在的二级目录。
+2. 仅当所有现有目录都不合适时，targetKind 才能为 new_directory。此时 newDirectoryParent 填“root”表示在目标根目录新建一级目录，或填现有一级目录名称表示在其下新建二级目录；newDirectoryName 必须是简洁、可复用的目录名。
+3. 结合文档标题、现有路径和正文判断，不要因为文档来自“其他”而继续推荐“其他”。
+4. 摘要说明文档核心主题，理由说明为何适合该目标路径或为何需要新目录。
+
+严格输出 JSON，禁止 Markdown 或额外文字：
+{
+  "targetKind": "existing_directory 或 new_directory",
+  "primaryCategory": "现有一级目录名称；新建目录时可为空",
+  "secondaryCategory": "现有二级目录名称或空字符串",
+  "newDirectoryParent": "root 或现有一级目录名称；仅新建目录时填写",
+  "newDirectoryName": "仅新建目录时填写",
+  "confidence": 0.0,
+  "reason": "不超过100字",
+  "summary": "不超过160字"
+}`;
+
+  const client = new OpenAI({ apiKey: llmConfig.llmApiKey, baseURL: llmConfig.llmBaseUrl });
+  try {
+    const response = await client.chat.completions.create({
+      model: llmConfig.llmModel,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `标题：${source.title}\n来源路径：${source.path.join(" / ") || "其他"}\n正文摘录：\n${excerpt || "（正文为空）"}` },
+      ],
+    });
+    const result = otherDirectoryResultSchema.parse(parseJson(response.choices[0]?.message?.content || ""));
+
+    if (result.targetKind === "new_directory") {
+      const parent = result.newDirectoryParent.trim();
+      if (!result.newDirectoryName.trim() || (parent !== "root" && !taxonomy[parent])) {
+        return { ...result, targetKind: "existing_directory", error: "模型给出的新目录路径无效，请人工确认" };
+      }
+      return { ...result, newDirectoryParent: parent, newDirectoryName: result.newDirectoryName.trim() };
+    }
+
+    const resolved = resolveCategory(result.primaryCategory, result.secondaryCategory, taxonomy);
+    if (!isValidCategory(resolved.primary, resolved.secondary, taxonomy)) {
+      return { ...result, error: "模型建议未能匹配到现有目录，请人工确认" };
+    }
+    return {
+      ...result,
+      primaryCategory: resolved.primary,
+      secondaryCategory: resolved.secondary,
+    };
+  } catch (error) {
+    return {
+      targetKind: "existing_directory",
+      error: error instanceof Error ? `LLM 推荐失败：${error.message}` : "LLM 推荐失败",
+    };
   }
 }

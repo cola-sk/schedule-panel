@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import { getTask } from "@/lib/knowledge-migration/store";
-import { generateMigrationWeeklyStats, computeCycleStats } from "@/lib/knowledge-migration/stats";
+import { generateMigrationWeeklyStats, computeCycleStats, computeSubdirectoryStats } from "@/lib/knowledge-migration/stats";
 import { renderStatsDashboardImage } from "@/lib/knowledge-migration/image-generator";
 import type { StatCycleType } from "@/lib/knowledge-migration/types";
 
@@ -20,11 +20,12 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     const cycleParam = request.nextUrl.searchParams.get("cycle") as StatCycleType | null;
-    const cycleType = cycleParam || task.notifyConfig?.cycleType || "this_week";
+    const cycleType = cycleParam || task.notifyConfig?.cycleType || (task.notifyConfig?.frequency === "daily" ? "yesterday" : "this_week");
 
     const stats = task.stats || (await generateMigrationWeeklyStats(taskId));
     const cycleStats = computeCycleStats(stats, cycleType);
-    const imagePath = await renderStatsDashboardImage(stats, task.name, cycleStats);
+    const directoryStats = computeSubdirectoryStats(stats, task.targetDirectories || [], cycleStats);
+    const imagePath = await renderStatsDashboardImage(stats, task.name, cycleStats, directoryStats);
 
     const imageBuffer = fs.readFileSync(imagePath);
     try {

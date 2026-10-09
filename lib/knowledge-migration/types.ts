@@ -138,7 +138,33 @@ export interface KnowledgeDirectory {
   children: Array<{ title: string; nodeToken: string }>;
 }
 
-export type StatCycleType = "last_week" | "past_7_days" | "this_week";
+export interface OtherDirectoryRecommendation {
+  targetKind: "existing_directory" | "new_directory";
+  primaryCategory?: string;
+  secondaryCategory?: string;
+  newDirectoryParent?: "root" | string;
+  newDirectoryName?: string;
+  confidence?: number;
+  reason?: string;
+  summary?: string;
+  error?: string;
+}
+
+export interface OtherDirectoryDocument {
+  nodeToken: string;
+  documentToken: string;
+  parentNodeToken?: string;
+  objType?: string;
+  title: string;
+  path: string[];
+  url?: string;
+  hasChildren?: boolean;
+  contentLength?: number;
+  contentWarning?: string;
+  recommendation: OtherDirectoryRecommendation;
+}
+
+export type StatCycleType = "yesterday" | "last_week" | "past_7_days" | "this_week";
 
 export interface CycleStatsResult {
   cycleType: StatCycleType;
@@ -161,9 +187,10 @@ export interface TaskNotifyConfig {
   enabled: boolean;
   botId?: string; // 选中的系统已有机器人 ID
   webhookUrl?: string; // Webhook 地址（可从 botId 自动解析或手动配置）
+  frequency?: "daily" | "weekly";
   dayOfWeek: number; // 1-7, 1: 周一 ... 5: 周五 ... 7: 周日
   time: string; // 如 "18:00"
-  cycleType?: StatCycleType; // 贡献榜统计周期：上个自然周 ("last_week") | 到今天为止前七天 ("past_7_days") | 本自然周 ("this_week"，默认)
+  cycleType?: StatCycleType;
   lastSentAt?: string;
   sendMode?: "both" | "image_only" | "text_only"; // 图文一起发送 (默认 both) | 仅发送长图 | 仅发送文字卡片
 }
@@ -423,4 +450,3 @@ export function resolveCategory(
     secondary: matchedSecondary || "",
   };
 }
-

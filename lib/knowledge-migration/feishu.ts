@@ -1,6 +1,6 @@
 import "server-only";
 import pLimit from "p-limit";
-import { getFeishuClient, parseDocumentTarget, appendDocumentContent, updateDocumentContent, formatLarkError } from "@/lib/mcp/feishu-doc-engine";
+import { getFeishuClient, parseDocumentTarget, appendDocumentContent, updateDocumentContent, formatLarkError, type DocxImageAsset } from "@/lib/mcp/feishu-doc-engine";
 import { taxonomyFromDirectories, type DynamicTaxonomy, type KnowledgeDirectory, type PrimaryCategory, type SecondaryCategory } from "./types";
 
 export type WikiNode = {
@@ -19,6 +19,12 @@ export type FeishuDocNode = {
   title: string;
   parentNodeToken?: string;
   url?: string;
+};
+
+export type FeishuWikiDocument = FeishuDocNode & {
+  path: string[];
+  hasChildren?: boolean;
+  objType?: string;
 };
 
 export type WikiDestination = {
@@ -74,6 +80,96 @@ async function listChildren(spaceId: string, parentToken: string): Promise<WikiN
     pageToken = response.data?.has_more ? response.data.page_token : undefined;
   } while (pageToken);
   return items;
+}
+
+/** 递归读取指定知识库目录下的所有文档节点，不包含传入的目录节点自身。 */
+export async function listWikiDocumentsBelow(
+  spaceId: string,
+  parentNodeToken: string,
+  origin?: string,
+): Promise<FeishuWikiDocument[]> {
+  const documents: FeishuWikiDocument[] = [];
+  const visited = new Set<string>();
+
+  async function visit(parentToken: string, path: string[]) {
+    if (visited.has(parentToken)) return;
+    visited.add(parentToken);
+
+    const children = await listChildren(spaceId, parentToken);
+    for (const child of children) {
+      if (!child.node_token) continue;
+      const title = child.title?.trim() || "无标题文档";
+      const childPath = [...path, title];
+
+      if (child.obj_token) {
+        documents.push({
+          nodeToken: child.node_token,
+          documentToken: child.obj_token,
+          title,
+          parentNodeToken: parentToken,
+          path: childPath,
+          hasChildren: child.has_child,
+          objType: child.obj_type,
+          url: child.url || (origin ? `${origin}/wiki/${child.node_token}` : undefined),
+        });
+      }
+
+      if (child.has_child) {
+        await visit(child.node_token, childPath);
+      }
+    }
+  }
+
+  await visit(parentNodeToken, []);
+  return documents;
+}
+
+export async function getOrCreateWikiDirectory(input: {
+  spaceId: string;
+  parentNodeToken: string;
+  title: string;
+}): Promise<{ nodeToken: string; created: boolean }> {
+  const title = input.title.trim();
+  if (!title) throw new Error("新建目录名称不能为空");
+
+  const existing = (await listChildren(input.spaceId, input.parentNodeToken)).find(
+    (node) => node.node_token && node.title?.trim() === title,
+  );
+  if (existing?.node_token) return { nodeToken: existing.node_token, created: false };
+
+  const client = getFeishuClient();
+  let response;
+  try {
+    response = await client.wiki.spaceNode.create({
+      path: { space_id: input.spaceId },
+      data: { obj_type: "docx", node_type: "origin", parent_node_token: input.parentNodeToken, title },
+    });
+  } catch (error) {
+    throw new Error(formatLarkError(error, "在飞书知识库创建目录失败"));
+  }
+  if (response.code !== 0 || !response.data?.node?.node_token) {
+    throw new Error(formatLarkError(response, "在飞书知识库创建目录失败"));
+  }
+  return { nodeToken: response.data.node.node_token, created: true };
+}
+
+export async function moveWikiNode(input: {
+  spaceId: string;
+  nodeToken: string;
+  targetParentNodeToken: string;
+}) {
+  const client = getFeishuClient();
+  let response;
+  try {
+    response = await client.wiki.spaceNode.move({
+      path: { space_id: input.spaceId, node_token: input.nodeToken },
+      data: { target_parent_token: input.targetParentNodeToken },
+    });
+  } catch (error) {
+    throw new Error(formatLarkError(error, "移动飞书知识库文档失败"));
+  }
+  if (response.code !== 0) throw new Error(formatLarkError(response, "移动飞书知识库文档失败"));
+  return response.data?.node;
 }
 
 /**
@@ -218,6 +314,7 @@ export async function createMigratedWikiDocument(input: {
   parentNodeToken?: string;
   title: string;
   markdown: string;
+  images?: ReadonlyMap<string, DocxImageAsset>;
 }) {
   const parentToken =
     input.parentNodeToken ||
@@ -237,11 +334,12 @@ export async function createMigratedWikiDocument(input: {
   const existingNode = input.destination.existingNodesByParentAndTitle?.get(`${parentToken}:::${input.title.trim()}`);
   if (existingNode) {
     try {
-      await updateDocumentContent(existingNode.documentToken, input.markdown, { title: input.title });
+      await updateDocumentContent(existingNode.documentToken, input.markdown, { title: input.title, images: input.images });
     } catch (updateErr) {
       console.warn("更新已有飞书文档内容提示:", updateErr);
+      if (input.images?.size) throw updateErr;
       try {
-        await appendDocumentContent(existingNode.documentToken, input.markdown);
+        await appendDocumentContent(existingNode.documentToken, input.markdown, { images: input.images });
       } catch {
         // ignore
       }
@@ -305,7 +403,7 @@ export async function createMigratedWikiDocument(input: {
     throw new Error(formatLarkError(created, "在飞书知识库创建文档失败"));
   }
 
-  await appendDocumentContent(node.obj_token, input.markdown);
+  await appendDocumentContent(node.obj_token, input.markdown, { images: input.images });
   const resultNode = {
     nodeToken: node.node_token,
     documentToken: node.obj_token,

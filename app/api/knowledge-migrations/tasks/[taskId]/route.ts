@@ -74,6 +74,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         notifySchedule: task.notifyConfig
           ? {
               enabled: task.notifyConfig.enabled,
+              frequency: task.notifyConfig.frequency || "weekly",
               dayOfWeek: task.notifyConfig.dayOfWeek,
               time: task.notifyConfig.time,
               lastSentAt: task.notifyConfig.lastSentAt,

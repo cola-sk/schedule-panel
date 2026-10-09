@@ -364,7 +364,20 @@ export function convertBlocksToMarkdown(blocks: Array<any>): string {
 /**
  * 将 Markdown / 纯文本解析为飞书 Docx 创建子块时需要的 Children 结构
  */
-export function parseMarkdownToDocxBlocks(markdown: string): Array<any> {
+export type DocxImageAsset = {
+  fileName: string;
+  alt?: string;
+  data: Buffer;
+  width?: number;
+  height?: number;
+};
+
+export type DocumentWriteOptions = {
+  /** Source images keyed by their Markdown URL marker. */
+  images?: ReadonlyMap<string, DocxImageAsset>;
+};
+
+export function parseMarkdownToDocxBlocks(markdown: string, options?: DocumentWriteOptions): Array<any> {
   const blocks: Array<any> = [];
   const lines = normalizeLegacyConfluenceMarkdown(markdown).split(/\r?\n/);
   let inCodeBlock = false;
@@ -406,6 +419,37 @@ export function parseMarkdownToDocxBlocks(markdown: string): Array<any> {
 
     // 空行跳过
     if (!trimmed) continue;
+
+    // Images used by the knowledge migration are emitted as a standalone
+    // Markdown image marker.  Keep the asset metadata private until after the
+    // image block exists in Feishu; the media API requires that block ID as
+    // its parent_node.
+    // Turndown sometimes preserves a Confluence image wrapped in bold or
+    // italic markup (for example **![diagram](confluence-image://0)**).
+    // The image is still a standalone element semantically, so unwrap that
+    // decoration before creating the native Docx image block.
+    const imageMatch = trimmed.match(/^(?:\*\*|__|\*|_)?!\[([^\]]*)\]\(([^)]+)\)(?:\*\*|__|\*|_)?$/);
+    if (imageMatch) {
+      const asset = options?.images?.get(imageMatch[2]);
+      if (asset) {
+        blocks.push({
+          block_type: 27, // image
+          image: {
+            ...(asset.alt ? { caption: { content: asset.alt } } : {}),
+          },
+          __imageAsset: asset,
+        });
+      } else {
+        // Do not silently discard arbitrary Markdown images in existing users
+        // of this generic writer.  Only our internal migration markers are
+        // handled as image blocks.
+        blocks.push({
+          block_type: 2,
+          text: { elements: parseInlineElements(rawLine) },
+        });
+      }
+      continue;
+    }
 
     // Confluence 兼容分隔线。独立于正式 Markdown 规则，处理旧页面中
     // 常见的 ====、------ 以及被转义为 \====、\------ 的写法。
@@ -1113,11 +1157,12 @@ export async function createDocument(params: {
 export async function appendDocumentContent(
   documentIdOrUrl: string,
   content: string,
+  options?: DocumentWriteOptions,
 ) {
   const client = getFeishuClient();
   const { documentId } = await resolveRealDocumentId(client, documentIdOrUrl);
 
-  const blocks = parseMarkdownToDocxBlocks(content);
+  const blocks = parseMarkdownToDocxBlocks(content, options);
   if (blocks.length === 0) {
     return { documentId, appendedBlocks: 0, message: "内容为空，未追加任何块" };
   }
@@ -1137,13 +1182,40 @@ export async function appendDocumentContent(
             document_id: documentId,
             block_id: documentId,
           },
-          data: { children: chunk, index: -1 },
+          // __imageAsset is local bookkeeping for the upload that follows;
+          // Feishu's create-block endpoint only accepts documented fields.
+          data: { children: chunk.map(({ __imageAsset, ...block }) => block), index: -1 },
         });
       } catch (error: any) {
         throw new Error(formatLarkError(error, `向飞书文档写入内容失败 (document_id: ${documentId})`));
       }
       if (appendRes.code !== 0) {
         throw new Error(formatLarkError(appendRes, `向飞书文档写入内容失败 (document_id: ${documentId})`));
+      }
+      const createdBlocks = (appendRes.data?.children || []) as Array<{ block_id?: string }>;
+      const pendingImages = chunk.flatMap((block, blockIndex) => {
+        const asset = block.__imageAsset as DocxImageAsset | undefined;
+        if (!asset) return [];
+        const imageBlockId = createdBlocks[blockIndex]?.block_id;
+        if (!imageBlockId) {
+          throw new Error(`飞书未返回图片块 ID，无法上传图片「${asset.fileName}」`);
+        }
+        return [{ imageBlockId, asset }];
+      });
+      // Feishu limits concurrent edits for one document to 3 QPS. Upload and
+      // bind three independent image blocks in parallel.  Leave a full rate
+      // window between batches: otherwise a large document can start its
+      // second batch before the first three edits have been accounted for,
+      // resulting in image blocks that exist but have no bound media.
+      for (let imageIndex = 0; imageIndex < pendingImages.length; imageIndex += 3) {
+        await Promise.all(
+          pendingImages.slice(imageIndex, imageIndex + 3).map(({ imageBlockId, asset }) =>
+            uploadDocxImage(client, documentId, imageBlockId, asset),
+          ),
+        );
+        if (imageIndex + 3 < pendingImages.length) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 1100));
+        }
       }
       totalAppended += chunk.length;
     }
@@ -1166,6 +1238,49 @@ export async function appendDocumentContent(
     appendedBlocks: totalAppended,
     url: `https://open.feishu.cn/docx/${documentId}`,
   };
+}
+
+async function uploadDocxImage(
+  client: lark.Client,
+  documentId: string,
+  imageBlockId: string,
+  asset: DocxImageAsset,
+) {
+  let uploadResult;
+  try {
+    uploadResult = await client.drive.media.uploadAll({
+      data: {
+        file_name: asset.fileName,
+        parent_type: "docx_image",
+        parent_node: imageBlockId,
+        size: asset.data.length,
+        file: asset.data,
+      },
+    });
+  } catch (error: any) {
+    throw new Error(formatLarkError(error, `上传飞书图片素材失败「${asset.fileName}」`));
+  }
+  const token = uploadResult?.file_token;
+  if (!token) throw new Error(`上传飞书图片素材失败「${asset.fileName}」：未返回素材 token`);
+
+  try {
+    const patchResult = await client.docx.documentBlock.patch({
+      path: { document_id: documentId, block_id: imageBlockId },
+      data: {
+        replace_image: {
+          token,
+          // Confluence often stores only one dimension (for example just
+          // height="250"). Supplying that single edge to Feishu can distort
+          // the aspect ratio, so let Feishu derive both dimensions from the
+          // uploaded image itself.
+          ...(asset.alt ? { caption: { content: asset.alt } } : {}),
+        },
+      },
+    });
+    if (patchResult.code !== 0) throw patchResult;
+  } catch (error: any) {
+    throw new Error(formatLarkError(error, `绑定飞书图片块失败「${asset.fileName}」`));
+  }
 }
 
 async function appendTableBlock(
@@ -1440,7 +1555,7 @@ export async function copyDocumentContent(
 export async function updateDocumentContent(
   documentIdOrUrl: string,
   newContent: string,
-  options?: { title?: string },
+  options?: { title?: string } & DocumentWriteOptions,
 ) {
   const client = getFeishuClient();
   const { documentId, wikiToken, title: oldTitle } = await resolveRealDocumentId(
@@ -1452,7 +1567,7 @@ export async function updateDocumentContent(
   await clearDocumentChildren(client, documentId);
 
   // 2. 写入全新的 Markdown 内容
-  const appendRes = await appendDocumentContent(documentId, newContent);
+  const appendRes = await appendDocumentContent(documentId, newContent, options);
 
   // 3. 如果需要同时更新标题，且提供了新标题
   if (options?.title) {

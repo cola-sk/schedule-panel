@@ -31,6 +31,7 @@ import type { TaskNotifyConfig } from "@/lib/knowledge-migration/types";
 
 const WEEKDAY_LABELS = ["", "周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const CYCLE_LABELS: Record<string, string> = {
+  yesterday: "前一天",
   last_week: "上个自然周",
   past_7_days: "到今天为止前七天",
   this_week: "本自然周",
@@ -54,7 +55,7 @@ interface KnowledgeMigrationStatsPanelProps {
   stats?: TaskMigrationStats | null;
   onRefresh: () => Promise<unknown> | void;
   loading?: boolean;
-  notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "dayOfWeek" | "time" | "lastSentAt" | "cycleType"> & { nextRunAt?: string };
+  notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "frequency" | "dayOfWeek" | "time" | "lastSentAt" | "cycleType"> & { nextRunAt?: string };
   onNotifyConfigSaved?: () => Promise<unknown> | void;
 }
 
@@ -284,9 +285,9 @@ export function KnowledgeMigrationStatsPanel({
                   <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
                   定时任务已启动
                 </span>
-                <span>每{WEEKDAY_LABELS[notifySchedule.dayOfWeek] || "周"} {notifySchedule.time}（北京时间）执行</span>
+                <span>{notifySchedule.frequency === "daily" ? "每天" : `每${WEEKDAY_LABELS[notifySchedule.dayOfWeek] || "周"}`} {notifySchedule.time}（北京时间）执行</span>
                 <span className="rounded bg-emerald-100 dark:bg-emerald-900/60 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 dark:text-emerald-200">
-                  榜单周期：{CYCLE_LABELS[notifySchedule.cycleType || "this_week"]}
+                  榜单周期：{CYCLE_LABELS[notifySchedule.cycleType || (notifySchedule.frequency === "daily" ? "yesterday" : "this_week")]}
                 </span>
                 <span className="inline-flex items-center gap-1 text-emerald-800/80 dark:text-emerald-200/80">
                   <Calendar className="size-3.5" />

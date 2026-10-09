@@ -12,6 +12,7 @@ import {
   FileText,
   Filter,
   Folder,
+  FolderInput,
   FolderOpen,
   FolderSync,
   EyeOff,
@@ -38,6 +39,7 @@ import {
   type WikiTreeNode,
 } from "@/lib/knowledge-migration/types";
 import { KnowledgeMigrationStatsPanel } from "./knowledge-migration-stats-panel";
+import { KnowledgeMigrationOtherDirectory } from "./knowledge-migration-other-directory";
 
 type Taxonomy = Record<string, readonly string[]>;
 
@@ -69,7 +71,7 @@ type TaskDetailResponse = {
       counts: Record<MigrationStatus, number>;
       jobs: Array<{ id: string; status: string; total: number; processed: number; failed: number; startedAt: string }>;
     };
-    notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "dayOfWeek" | "time" | "lastSentAt"> & { nextRunAt?: string };
+    notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "frequency" | "dayOfWeek" | "time" | "lastSentAt" | "cycleType"> & { nextRunAt?: string };
   };
   currentNodeItem?: KnowledgeMigrationItem;
   items: KnowledgeMigrationItem[];
@@ -140,13 +142,13 @@ export function KnowledgeMigrationDashboard() {
   const [directoryMigrating, setDirectoryMigrating] = useState(false);
   const [showDirectoryModal, setShowDirectoryModal] = useState(false);
 
-  // 视图模式：工作台 vs 周度对比统计
-  const [viewMode, setViewModeState] = useState<"workbench" | "stats">("workbench");
+  // 视图模式：工作台、周度对比统计、其他目录整理
+  const [viewMode, setViewModeState] = useState<"workbench" | "stats" | "other">("workbench");
 
   useEffect(() => {
     try {
-      const savedMode = localStorage.getItem("km_view_mode") as "workbench" | "stats";
-      if (savedMode === "workbench" || savedMode === "stats") {
+      const savedMode = localStorage.getItem("km_view_mode") as "workbench" | "stats" | "other";
+      if (savedMode === "workbench" || savedMode === "stats" || savedMode === "other") {
         setViewModeState(savedMode);
       }
     } catch {
@@ -154,7 +156,7 @@ export function KnowledgeMigrationDashboard() {
     }
   }, []);
 
-  const setViewMode = (mode: "workbench" | "stats") => {
+  const setViewMode = (mode: "workbench" | "stats" | "other") => {
     setViewModeState(mode);
     try {
       localStorage.setItem("km_view_mode", mode);
@@ -783,6 +785,19 @@ export function KnowledgeMigrationDashboard() {
                   <span className="inline-block size-2 rounded-full bg-indigo-500 animate-pulse" title="点击查看全量统计" />
                 )}
               </button>
+
+              <button
+                type="button"
+                onClick={() => setViewMode("other")}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                  viewMode === "other"
+                    ? "bg-violet-600 text-white shadow-xs"
+                    : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                <FolderInput className="size-3.5" />
+                <span>其他目录整理</span>
+              </button>
             </div>
           </div>
         )}
@@ -800,7 +815,9 @@ export function KnowledgeMigrationDashboard() {
           />
         )}
 
-        {/* 模式 2：归档工作台 */}
+        {currentTask && viewMode === "other" && <KnowledgeMigrationOtherDirectory taskId={currentTask.id} />}
+
+        {/* 模式 3：归档工作台 */}
         {currentTask && viewMode === "workbench" && (
           <>
             {/* 概览数据卡片 */}

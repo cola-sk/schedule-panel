@@ -101,6 +101,7 @@ export function KnowledgeMigrationNotifyDialog({
     enabled: false,
     botId: "",
     webhookUrl: "",
+    frequency: "weekly",
     dayOfWeek: 5,
     time: "18:00",
     cycleType: "this_week",
@@ -183,7 +184,7 @@ export function KnowledgeMigrationNotifyDialog({
           botId: config.botId || undefined,
           webhookUrl: config.webhookUrl?.trim() || undefined,
           sendMode: config.sendMode || "both",
-          cycleType: config.cycleType || "this_week",
+          cycleType: config.frequency === "daily" ? "yesterday" : config.cycleType || "this_week",
         }),
       });
       const data = await res.json();
@@ -250,7 +251,7 @@ export function KnowledgeMigrationNotifyDialog({
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    系统将在设定的时间自动分析文档并推送周报卡片到飞书群
+                    系统将在设定的时间自动分析文档并推送统计卡片到飞书群
                   </p>
                 </div>
                 <input
@@ -317,8 +318,22 @@ export function KnowledgeMigrationNotifyDialog({
               </div>
 
               {/* 定时周期与具体时间 */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-foreground">推送频率</label>
+                <select
+                  value={config.frequency || "weekly"}
+                  onChange={(e) => {
+                    const frequency = e.target.value as "daily" | "weekly";
+                    setConfig({ ...config, frequency, cycleType: frequency === "daily" ? "yesterday" : "this_week" });
+                  }}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value="daily">每天</option>
+                  <option value="weekly">每周</option>
+                </select>
+              </div>
               <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
+                {(config.frequency || "weekly") === "weekly" && <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-foreground">
                     推送周期（星期）
                   </label>
@@ -333,7 +348,7 @@ export function KnowledgeMigrationNotifyDialog({
                       </option>
                     ))}
                   </select>
-                </div>
+                </div>}
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-foreground">
@@ -349,7 +364,11 @@ export function KnowledgeMigrationNotifyDialog({
               </div>
 
               {/* 贡献榜统计周期选择 */}
-              <div className="space-y-2">
+              {(config.frequency || "weekly") === "daily" ? (
+                <div className="rounded-lg bg-indigo-50/60 px-3 py-2 text-xs text-indigo-700 dark:bg-indigo-950/30 dark:text-indigo-300">
+                  每天统计北京时间前一天（00:00 至 23:59:59）每位成员新增的文档，累计总贡献榜仍在文字卡片中展示。
+                </div>
+              ) : <div className="space-y-2">
                 <label className="text-xs font-semibold text-foreground flex items-center justify-between">
                   <span className="flex items-center gap-1.5">
                     <span>🏆 贡献榜统计周期</span>
@@ -405,7 +424,7 @@ export function KnowledgeMigrationNotifyDialog({
                     );
                   })}
                 </div>
-              </div>
+              </div>}
 
               {/* 上次发送记录 */}
               <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs flex items-center justify-between text-muted-foreground">

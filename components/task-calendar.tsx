@@ -9,7 +9,7 @@ import type { ReminderTask } from "@/lib/core/types";
 type CalendarHoliday = { date: string; name: string };
 type CalendarView = "month" | "week";
 
-const weekdayLabels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+const weekdayLabels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 function dateFromKey(key: string): Date {
   return new Date(`${key}T12:00:00+08:00`);
@@ -37,8 +37,7 @@ function monthKey(key: string): string {
 }
 
 function startOfWeek(key: string): string {
-  const day = dateFromKey(key).getUTCDay() || 7;
-  return addDays(key, 1 - day);
+  return addDays(key, -dateFromKey(key).getUTCDay());
 }
 
 function formatMonth(key: string): string {
@@ -92,11 +91,11 @@ export function TaskCalendar({
     const year = Number(cursor.slice(0, 4));
     const month = Number(cursor.slice(5, 7));
     const first = `${year}-${String(month).padStart(2, "0")}-01`;
-    const firstWeekday = dateFromKey(first).getUTCDay() || 7;
+    const firstWeekday = dateFromKey(first).getUTCDay();
     const last = keyFromDate(new Date(Date.UTC(year, month, 0, 4)));
-    const lastWeekday = dateFromKey(last).getUTCDay() || 7;
-    const gridStart = addDays(first, 1 - firstWeekday);
-    const gridEnd = addDays(last, 7 - lastWeekday);
+    const lastWeekday = dateFromKey(last).getUTCDay();
+    const gridStart = addDays(first, -firstWeekday);
+    const gridEnd = addDays(last, 6 - lastWeekday);
     const total = Math.round((dateFromKey(gridEnd).getTime() - dateFromKey(gridStart).getTime()) / (24 * 60 * 60 * 1000)) + 1;
     return Array.from({ length: total }, (_, index) => addDays(gridStart, index));
   }, [cursor, view]);

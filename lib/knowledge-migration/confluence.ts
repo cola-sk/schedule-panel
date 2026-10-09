@@ -16,6 +16,24 @@ type ConfluencePage = {
 };
 type PageListResponse = { results?: ConfluencePage[]; size?: number };
 
+/** An image embedded in a Confluence storage-format page. */
+export type ConfluenceStorageImage = {
+  marker: string;
+  filename: string;
+  alt: string;
+  width?: number;
+  height?: number;
+};
+
+export type ConfluenceImageAsset = {
+  marker: string;
+  fileName: string;
+  alt: string;
+  data: Buffer;
+  width?: number;
+  height?: number;
+};
+
 function personName(person?: ConfluencePerson) {
   return person?.displayName || person?.publicName || person?.username;
 }
@@ -45,6 +63,84 @@ function getHeaders(config: KnowledgeMigrationConfig) {
   }
   if (config.confluenceAuthType === "cookie") headers.Cookie = secret;
   return headers;
+}
+
+function imageDimension(value: string | undefined) {
+  const dimension = Number.parseInt(value || "", 10);
+  return Number.isFinite(dimension) && dimension > 0 ? dimension : undefined;
+}
+
+/**
+ * Produces stable placeholders for Confluence attachment images.  The image
+ * bytes are intentionally fetched later, immediately before they are written
+ * to Feishu, so scanning/classification does not download every attachment.
+ */
+export function extractStorageImages(storageXhtml: string): ConfluenceStorageImage[] {
+  const $ = cheerio.load(storageXhtml, { xmlMode: true });
+  const images: ConfluenceStorageImage[] = [];
+
+  let attachmentImageIndex = 0;
+  $("ac\\:image").each((_, element) => {
+    const filename = $(element).find("ri\\:attachment").attr("ri:filename")?.trim();
+    // Remote URL images deliberately remain ordinary source links. Downloading
+    // arbitrary URLs from a migration service would turn this feature into an
+    // SSRF primitive; attached Confluence images are authenticated and safe.
+    if (!filename) return;
+    const alt = $(element).attr("ac:alt")?.trim() || filename;
+    images.push({
+      marker: `confluence-image://${attachmentImageIndex++}`,
+      filename,
+      alt,
+      width: imageDimension($(element).attr("ac:width")),
+      height: imageDimension($(element).attr("ac:height")),
+    });
+  });
+
+  return images;
+}
+
+/** Download the attachment bytes that will be uploaded into a Feishu Docx image block. */
+export async function downloadConfluenceImages(
+  config: KnowledgeMigrationConfig,
+  pageId: string,
+  images: ConfluenceStorageImage[],
+): Promise<Map<string, ConfluenceImageAsset>> {
+  const assets = new Map<string, ConfluenceImageAsset>();
+  const limit = 20 * 1024 * 1024;
+
+  for (const image of images) {
+    const pathname = `/download/attachments/${encodeURIComponent(pageId)}/${encodeURIComponent(image.filename)}`;
+    const response = await fetch(`${normalizeBaseUrl(config.confluenceBaseUrl)}${pathname}`, {
+      headers: getHeaders(config),
+      cache: "no-store",
+      redirect: "follow",
+    });
+    if (!response.ok) {
+      throw new Error(`下载 Confluence 图片附件「${image.filename}」失败 (${response.status})`);
+    }
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      throw new Error(`Confluence 附件「${image.filename}」不是图片，无法迁移为飞书图片块`);
+    }
+    const contentLength = Number(response.headers.get("content-length") || 0);
+    if (contentLength > limit) {
+      throw new Error(`Confluence 图片附件「${image.filename}」超过飞书图片上传上限（20 MB）`);
+    }
+    const data = Buffer.from(await response.arrayBuffer());
+    if (!data.length || data.length > limit) {
+      throw new Error(`Confluence 图片附件「${image.filename}」为空或超过飞书图片上传上限（20 MB）`);
+    }
+    assets.set(image.marker, {
+      marker: image.marker,
+      fileName: image.filename,
+      alt: image.alt,
+      data,
+      width: image.width,
+      height: image.height,
+    });
+  }
+
+  return assets;
 }
 
 async function confluenceRequest<T>(config: KnowledgeMigrationConfig, pathname: string): Promise<T> {
@@ -298,14 +394,51 @@ function macroLabel(name: string) {
 }
 
 /** Converts the most common Confluence storage macros into semantic HTML before Markdown conversion. */
-export function storageXhtmlToMarkdown(storageXhtml: string) {
+function convertStorageXhtmlToMarkdown(
+  storageXhtml: string,
+  imagePlaceholder?: (image: ConfluenceStorageImage, index: number) => string,
+) {
   const $ = cheerio.load(storageXhtml, { xmlMode: true });
   const tableMarkdown: string[] = [];
+
+  // Keep the source ordering stable even when a table is replaced before the
+  // document-wide image pass below.  Image nodes inside a table would
+  // otherwise disappear while the table is flattened to Markdown.
+  const attachmentImageIndices = new Map<any, number>();
+  let attachmentImageIndex = 0;
+  $("ac\\:image").each((_, element) => {
+    if ($(element).find("ri\\:attachment").attr("ri:filename")?.trim()) {
+      attachmentImageIndices.set(element, attachmentImageIndex);
+      attachmentImageIndex += 1;
+    }
+  });
+
+  const toStorageImage = (element: any, index: number): ConfluenceStorageImage | undefined => {
+    const attachment = $(element).find("ri\\:attachment").attr("ri:filename")?.trim();
+    if (!attachment) return undefined;
+    return {
+      marker: `confluence-image://${index}`,
+      filename: attachment,
+      alt: $(element).attr("ac:alt")?.trim() || attachment,
+      width: imageDimension($(element).attr("ac:width")),
+      height: imageDimension($(element).attr("ac:height")),
+    };
+  };
 
   // Turndown's GFM table rule only recognizes tables whose first row is a
   // header row. Confluence commonly emits ordinary <td> cells (and uses
   // colspan/rowspan), so normalize every table ourselves before conversion.
   $("table").each((_, table) => {
+    const tableImageMarkers = imagePlaceholder
+      ? $(table)
+          .find("ac\\:image")
+          .toArray()
+          .flatMap((element) => {
+            const index = attachmentImageIndices.get(element);
+            const image = index === undefined ? undefined : toStorageImage(element, index);
+            return image && index !== undefined ? [imagePlaceholder(image, index)] : [];
+          })
+      : [];
     const rows = $(table).find("tr").toArray().map((row) => $(row).find("th,td").toArray());
     if (!rows.length) return;
     const columnCount = Math.max(...rows.map((row) => row.reduce((count, cell) => count + Math.max(1, Number($(cell).attr("colspan")) || 1), 0)));
@@ -381,6 +514,10 @@ export function storageXhtmlToMarkdown(storageXhtml: string) {
       `| ${header.join(" | ")} |`,
       `| ${header.map(() => "---").join(" | ")} |`,
       ...grid.slice(headerIndex + 1).map((row) => `| ${row.join(" | ")} |`),
+      // Docx's table API does not support the migration image binding API in
+      // a cell. Keep these images directly after their source table instead
+      // of losing them during the HTML-to-table conversion.
+      ...tableImageMarkers,
     ];
     const placeholder = `CONFLUENCE-TABLE-${tableMarkdown.length}`;
     tableMarkdown.push(lines.join("\n"));
@@ -417,6 +554,13 @@ export function storageXhtmlToMarkdown(storageXhtml: string) {
     const attachment = $(element).find("ri\\:attachment").attr("ri:filename");
     const remoteUrl = $(element).find("ri\\:url").attr("ri:value");
     const label = attachment ? `图片附件：${attachment}` : "图片或附件（请查看来源原文）";
+    if (attachment && imagePlaceholder) {
+      const index = attachmentImageIndices.get(element);
+      const image = index === undefined ? undefined : toStorageImage(element, index);
+      if (image && index !== undefined) $(element).replaceWith(`<p>${imagePlaceholder(image, index)}</p>`);
+      else $(element).replaceWith(`<p>${escapeHtml(label)}</p>`);
+      return;
+    }
     $(element).replaceWith(remoteUrl ? `<p><a href="${escapeHtml(remoteUrl)}">${escapeHtml(label)}</a></p>` : `<p>${escapeHtml(label)}</p>`);
   });
   $("ri\\:attachment, ri\\:url").remove();
@@ -431,6 +575,34 @@ export function storageXhtmlToMarkdown(storageXhtml: string) {
     .replace(/&nbsp;|\u00a0/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/** Text-only representation used for scan, classification, and source change detection. */
+export function storageXhtmlToMarkdown(storageXhtml: string) {
+  return convertStorageXhtmlToMarkdown(storageXhtml);
+}
+
+/**
+ * Markdown plus stable image markers used only while publishing a document.
+ * The marker is consumed by the Docx writer and becomes a native Feishu image
+ * block; it is never written as a visible link.
+ */
+export function storageXhtmlToMigratableMarkdown(storageXhtml: string): {
+  markdown: string;
+  images: ConfluenceStorageImage[];
+} {
+  const images = extractStorageImages(storageXhtml);
+  return {
+    // A plain placeholder survives Turndown without escaping Markdown image
+    // punctuation. Replace it only after the HTML conversion has completed.
+    markdown: convertStorageXhtmlToMarkdown(storageXhtml, (_image, index) => `CONFLUENCE-IMAGE-${index}`)
+      .replace(/CONFLUENCE-IMAGE-(\d+)/g, (_, index) => {
+        const image = images[Number(index)];
+        if (!image) return "图片附件（请查看来源原文）";
+        return `![${image.alt.replace(/[\[\]]/g, "")}](${image.marker})`;
+      }),
+    images,
+  };
 }
 
 function escapeHtml(value: string) {

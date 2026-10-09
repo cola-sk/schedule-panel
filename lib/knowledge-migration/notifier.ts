@@ -2,7 +2,7 @@ import "server-only";
 import fs from "fs";
 import { sendWebhookMessage } from "@/lib/core/feishu-client";
 import { atShanghaiLocal, chinaDateKey, chinaWeekday } from "@/lib/core/scheduler";
-import { generateMigrationWeeklyStats, computeCycleStats } from "./stats";
+import { generateMigrationWeeklyStats, computeCycleStats, computeSubdirectoryStats } from "./stats";
 import { getBot } from "@/lib/core/store";
 import { getFeishuClient } from "@/lib/mcp/feishu-doc-engine";
 import { renderStatsDashboardImage } from "./image-generator";
@@ -17,30 +17,51 @@ import type { TaskMigrationStats, TaskNotifyConfig, StatCycleType, CycleStatsRes
 import type { FeishuMessagePayload, ReminderTask } from "@/lib/core/types";
 
 /**
- * 计算统计通知下一次应执行的时间。该结果与定时派发器的按周、按北京时间规则一致，
+ * 计算统计通知下一次应执行的时间。该结果与定时派发器的每日/每周、按北京时间规则一致，
  * 仅用于向页面展示计划；真正的发送仍由 Cron 派发入口负责。
  */
 export function getNextMigrationStatsRunAt(config?: TaskNotifyConfig, now = new Date()): string | undefined {
   if (!config?.enabled) return undefined;
 
+  const frequency = config.frequency || "weekly";
   const dayOfWeek = Number(config.dayOfWeek);
   const time = config.time || "18:00";
-  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 1 || dayOfWeek > 7 || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+  if ((frequency === "weekly" && (!Number.isInteger(dayOfWeek) || dayOfWeek < 1 || dayOfWeek > 7)) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
     return undefined;
   }
 
   const todayAtScheduledTime = atShanghaiLocal(now, time);
+  const intervalDays = frequency === "daily" ? 1 : 7;
   let daysUntilRun = dayOfWeek - chinaWeekday(now);
+  if (frequency === "daily") daysUntilRun = 0;
   if (daysUntilRun < 0 || (daysUntilRun === 0 && todayAtScheduledTime.getTime() <= now.getTime())) {
-    daysUntilRun += 7;
+    daysUntilRun += intervalDays;
   }
 
   let nextRun = new Date(todayAtScheduledTime.getTime() + daysUntilRun * 24 * 60 * 60 * 1000);
-  if (config.lastSentAt && chinaDateKey(new Date(config.lastSentAt)) === chinaDateKey(nextRun)) {
-    nextRun = new Date(nextRun.getTime() + 7 * 24 * 60 * 60 * 1000);
+  if (hasSentScheduledOccurrence(config, nextRun)) {
+    nextRun = new Date(nextRun.getTime() + intervalDays * 24 * 60 * 60 * 1000);
   }
 
   return nextRun.toISOString();
+}
+
+/**
+ * 判断某个计划执行点是否已经完成。
+ *
+ * 测试发送也会保留 lastSentAt 以便展示发送历史，但它不应消耗尚未到点的定时执行。
+ * 因此只有发送时间达到该执行点后，才认为该执行点已完成。
+ */
+function hasSentScheduledOccurrence(config: TaskNotifyConfig, scheduledAt: Date): boolean {
+  if (!config.lastSentAt) return false;
+
+  const lastSentAt = new Date(config.lastSentAt);
+  if (Number.isNaN(lastSentAt.getTime())) return false;
+
+  return (
+    chinaDateKey(lastSentAt) === chinaDateKey(scheduledAt) &&
+    lastSentAt.getTime() >= scheduledAt.getTime()
+  );
 }
 
 /**
@@ -58,22 +79,23 @@ export function migrationStatsTasksBetween(start: Date, end: Date, now = new Dat
     const firstRunAt = getNextMigrationStatsRunAt(task.notifyConfig, baseline);
     if (!firstRunAt) continue;
 
+    const intervalDays = task.notifyConfig.frequency === "daily" ? 1 : 7;
     let occurrence = new Date(firstRunAt);
     let guard = 0;
-    while (occurrence.getTime() <= end.getTime() && guard < 20) {
+    while (occurrence.getTime() <= end.getTime() && guard < 400) {
       guard += 1;
       if (occurrence.getTime() >= start.getTime()) {
         calendarTasks.push({
           id: `knowledge-migration:${task.id}:${occurrence.toISOString()}`,
           scheduleId: `knowledge-migration:${task.id}`,
-          scheduleName: `知识库周报 · ${task.name}`,
+          scheduleName: `知识库统计 · ${task.name}`,
           host: { name: "系统自动" },
           scheduledAt: occurrence.toISOString(),
           status: "pending",
           content: "生成知识库归档统计并发送飞书通知",
         });
       }
-      occurrence = new Date(occurrence.getTime() + 7 * 24 * 60 * 60 * 1000);
+      occurrence = new Date(occurrence.getTime() + intervalDays * 24 * 60 * 60 * 1000);
     }
   }
 
@@ -81,7 +103,7 @@ export function migrationStatsTasksBetween(start: Date, end: Date, now = new Dat
 }
 
 /**
- * 构造知识库归档与文档沉淀周报飞书卡片
+ * 构造知识库归档与文档贡献统计飞书卡片
  */
 export function buildMigrationStatsCard(
   stats: TaskMigrationStats,
@@ -154,7 +176,7 @@ export function buildMigrationStatsCard(
         template: "blue",
         title: {
           tag: "plain_text",
-          content: `📊 知识库归档与文档迁移周报 · ${taskName}`,
+          content: "知识库迁移/贡献统计定时任务发送",
         },
       },
       elements: [
@@ -202,7 +224,7 @@ export function buildMigrationStatsCard(
                 img_key: imageKey,
                 alt: {
                   tag: "plain_text",
-                  content: "📊 知识库全景归档与周度迁移分析长图",
+                  content: "📊 知识库总量与重点子目录贡献统计",
                 },
                 mode: "fit_horizontal",
                 preview: true,
@@ -274,7 +296,7 @@ export async function sendTaskStatsNotification(
   }
 
   const sendMode = sendModeOverride || task.notifyConfig?.sendMode || "both";
-  const cycleType = cycleTypeOverride || task.notifyConfig?.cycleType || "this_week";
+  const cycleType = cycleTypeOverride || task.notifyConfig?.cycleType || (task.notifyConfig?.frequency === "daily" ? "yesterday" : "this_week");
 
   // 1. 生成最新全量统计数据与选定周期的贡献榜统计
   const stats = await generateMigrationWeeklyStats(taskId);
@@ -282,28 +304,26 @@ export async function sendTaskStatsNotification(
 
   let imageKey: string | undefined;
 
-  // 2. 若需要发送图片 (both 或 image_only)，生成并上传高清看板长图
+  // 2. 生成并上传总量与重点目录子目录统计图
   if (sendMode === "both" || sendMode === "image_only") {
-    try {
-      const imagePath = await renderStatsDashboardImage(stats, task.name, cycleStats);
-      const client = getFeishuClient();
-      const fileStream = fs.createReadStream(imagePath);
-      const uploadRes = await client.im.image.create({
-        data: {
-          image_type: "message",
-          image: fileStream,
-        },
-      });
-      imageKey = uploadRes?.image_key;
+    const uploadImage = async (imagePath: string): Promise<string> => {
       try {
-        fs.unlinkSync(imagePath);
-      } catch {}
-    } catch (imgError) {
-      console.error("生成或上传长图失败:", imgError);
-      if (sendMode === "image_only") {
-        throw new Error(`生成长图失败: ${imgError instanceof Error ? imgError.message : String(imgError)}`);
+        const client = getFeishuClient();
+        const fileStream = fs.createReadStream(imagePath);
+        const uploadRes = await client.im.image.create({
+          data: {
+            image_type: "message",
+            image: fileStream,
+          },
+        });
+        if (!uploadRes?.image_key) throw new Error("飞书图片上传未返回 image_key");
+        return uploadRes.image_key;
+      } finally {
+        fs.rmSync(imagePath, { force: true });
       }
-    }
+    };
+    const directoryStats = computeSubdirectoryStats(stats, task.targetDirectories || [], cycleStats);
+    imageKey = await uploadImage(await renderStatsDashboardImage(stats, task.name, cycleStats, directoryStats));
   }
 
   // 3. 根据发送模式派发群 Webhook 消息
@@ -340,9 +360,9 @@ export async function sendTaskStatsNotification(
 
   const modeDesc =
     sendMode === "image_only"
-      ? "仅发送看板长图"
+      ? "仅发送统计图"
       : sendMode === "both"
-      ? (imageKey ? "图文并茂（内嵌高清长图）" : "图文卡片")
+      ? "图文卡片（含统计图）"
       : "仅发送文字卡片";
 
   addTaskAuditLog(taskId, {
@@ -353,20 +373,19 @@ export async function sendTaskStatsNotification(
 
   return {
     ok: true,
-    message: `统计周报与贡献榜已成功发送至飞书群（${modeDesc} · ${cycleStats.cycleTitle}）！`,
+    message: `知识库统计与贡献榜已成功发送至飞书群（${modeDesc} · ${cycleStats.cycleTitle}）！`,
     stats,
     imageKey,
   };
 }
 
 /**
- * 定时轮询检查并派发所有到期的知识库归档周报通知（供全局 Cron 调用）
+ * 定时轮询检查并派发所有到期的知识库统计通知（供全局 Cron 调用）
  */
 export async function dispatchDueMigrationStats(): Promise<Array<{ taskId: string; status: "sent" | "failed"; error?: string }>> {
   const results: Array<{ taskId: string; status: "sent" | "failed"; error?: string }> = [];
   const tasks = getTasks();
   const now = new Date();
-  const todayKey = chinaDateKey(now);
   const currentWeekday = chinaWeekday(now); // 1: Mon ... 7: Sun
 
   for (const task of tasks) {
@@ -385,17 +404,17 @@ export async function dispatchDueMigrationStats(): Promise<Array<{ taskId: strin
     }
 
     // 检查星期几
-    if (notifyConfig.dayOfWeek !== currentWeekday) {
+    if (notifyConfig.frequency !== "daily" && notifyConfig.dayOfWeek !== currentWeekday) {
       continue;
     }
 
     // 检查今天是否已经发送过
-    if (notifyConfig.lastSentAt && chinaDateKey(new Date(notifyConfig.lastSentAt)) === todayKey) {
+    // 检查执行时间与 1 小时窗口
+    const scheduledTime = atShanghaiLocal(now, notifyConfig.time || "18:00");
+    if (hasSentScheduledOccurrence(notifyConfig, scheduledTime)) {
       continue;
     }
 
-    // 检查执行时间与 1 小时窗口
-    const scheduledTime = atShanghaiLocal(now, notifyConfig.time || "18:00");
     const diffMs = now.getTime() - scheduledTime.getTime();
     if (diffMs < 0 || diffMs > 3600_000) {
       continue;
@@ -406,7 +425,7 @@ export async function dispatchDueMigrationStats(): Promise<Array<{ taskId: strin
       await sendTaskStatsNotification(task.id);
       results.push({ taskId: task.id, status: "sent" });
     } catch (err: any) {
-      console.error(`[知识库归档] 任务 ${task.name}(${task.id}) 发送定时周报失败:`, err);
+      console.error(`[知识库归档] 任务 ${task.name}(${task.id}) 发送定时统计失败:`, err);
       results.push({ taskId: task.id, status: "failed", error: err?.message || "发送失败" });
     }
   }
