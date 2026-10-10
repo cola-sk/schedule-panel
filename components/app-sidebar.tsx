@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, CalendarClock, ListTodo, Settings2 } from "lucide-react";
+import { BookOpen, CalendarClock, FolderSync, ListTodo, Settings2 } from "lucide-react";
 
 const links = [
   { href: "/", label: "定时任务", icon: CalendarClock },
   { href: "/knowledge-migration", label: "知识库归档", icon: BookOpen },
+  { href: "/drive-migration", label: "网盘迁移", icon: FolderSync },
   { href: "/meeting", label: "会议行动", icon: ListTodo },
   { href: "/settings", label: "设置", icon: Settings2 },
 ];

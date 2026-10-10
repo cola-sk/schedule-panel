@@ -79,7 +79,7 @@ export function KnowledgeMigrationStatsPanel({
 
   const displaySelectedWeek = selectedWeek || stats?.weeks?.[0]?.weekKey || "all";
 
-  // 默认展开最近一周
+  // 仅明确标记为 true 的周度明细展开，默认全部折叠。
   const toggleWeek = (weekKey: string) => {
     setExpandedWeeks((prev) => ({
       ...prev,
@@ -760,7 +760,7 @@ export function KnowledgeMigrationStatsPanel({
               </div>
             ) : (
               filteredWeeks.map((week) => {
-                const isExpanded = expandedWeeks[week.weekKey] !== false; // 默认展开
+                const isExpanded = expandedWeeks[week.weekKey] === true;
 
                 return (
                   <Card key={week.weekKey} className="shadow-none border-border overflow-hidden">
