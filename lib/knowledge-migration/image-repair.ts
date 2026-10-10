@@ -185,7 +185,7 @@ export function getImageRepairProgress() {
 }
 
 /** Force-rewrite one known FEB migration after a renderer bug fix. */
-export async function repairOneDocument(wikiId: string) {
+export async function repairOneDocument(wikiId: string, options?: { forceStoredTarget?: boolean }) {
   const match = getTasks()
     .flatMap((task) => Object.values(task.items).map((item) => ({ task, item })))
     .find(({ item }) => item.wikiId === wikiId && item.status === "migrated" && item.targetDocumentToken);
@@ -195,7 +195,9 @@ export async function repairOneDocument(wikiId: string) {
   const source = storageXhtmlToMigratableMarkdown(page.body?.storage?.value || "");
   if (!source.images.length) throw new Error("该源页面不包含可迁移图片");
   const target = await retryRateLimited(() => inspectTargetDocument(match.item.targetDocumentToken!));
-  if (target.wikiId !== wikiId) throw new Error("飞书文档头部 Wiki ID 不匹配，已拒绝覆盖");
+  if (target.wikiId !== wikiId && !options?.forceStoredTarget) {
+    throw new Error("飞书文档头部 Wiki ID 不匹配，已拒绝覆盖");
+  }
 
   await repairCandidate({
     task: match.task,

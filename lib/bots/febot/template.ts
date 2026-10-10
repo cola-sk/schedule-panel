@@ -16,35 +16,74 @@ async function getDocumentDisplayName(): Promise<string> {
 }
 
 /**
- * FEBot 周会主持提醒专属消息模版
+ * FEBot 周会主持提醒专属消息模版（卡片交互格式，与工作周报风格统一）
  */
 export async function buildWeeklyMeetingReminder(context: MessageContext): Promise<FeishuMessagePayload> {
-  const { host } = context;
+  const { host, schedule } = context;
   const documentDisplayName = await getDocumentDisplayName();
-  const atElement = host.openId
-    ? { tag: "at", user_id: host.openId }
-    : { tag: "text", text: `@${host.name}` };
+  const atAllPrefix = schedule?.atAll ? "<at id=all></at>\n" : "";
+  const hostAtText = host.openId
+    ? `<at id=${host.openId}></at>`
+    : `@${host.name}`;
 
   return {
-    msg_type: "post",
-    content: {
-      post: {
-        zh_cn: {
-          title: "技术周会提醒",
-          content: [
-            [
-              { tag: "text", text: "本周周会即将开始，请大家提前更新好技术进展;\n" },
-              { tag: "text", text: "本周主持人：" },
-              atElement,
-              { tag: "text", text: " 请负责主持会议；" },
-            ],
-            [
-              { tag: "text", text: "文档地址:" },
-              { tag: "a", text: documentDisplayName, href: UPDATED_DOCUMENT_URL },
-            ],
-          ],
+    msg_type: "interactive",
+    card: {
+      config: {
+        wide_screen_mode: true,
+      },
+      header: {
+        template: "blue",
+        title: {
+          tag: "plain_text",
+          content: "📅 技术周会主持提醒",
         },
       },
+      elements: [
+        {
+          tag: "div",
+          text: {
+            tag: "lark_md",
+            content: `${atAllPrefix}本周技术周会即将开始，请大家提前更新好技术进展，准时参加会议。`,
+          },
+        },
+        {
+          tag: "div",
+          fields: [
+            {
+              is_short: true,
+              text: {
+                tag: "lark_md",
+                content: `**本周主持人：**\n${hostAtText}`,
+              },
+            },
+            {
+              is_short: true,
+              text: {
+                tag: "lark_md",
+                content: `**会议文档：**\n[${documentDisplayName}](${UPDATED_DOCUMENT_URL})`,
+              },
+            },
+          ],
+        },
+        {
+          tag: "hr",
+        },
+        {
+          tag: "action",
+          actions: [
+            {
+              tag: "button",
+              text: {
+                tag: "plain_text",
+                content: "👉 查看周会文档",
+              },
+              type: "primary",
+              url: UPDATED_DOCUMENT_URL,
+            },
+          ],
+        },
+      ],
     },
   };
 }

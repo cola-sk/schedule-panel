@@ -273,6 +273,38 @@ export default function DashboardPage() {
     }
   }
 
+  const [testExecuting, setTestExecuting] = useState(false);
+
+  async function handleTestExecuteSchedule(schedule: ReminderSchedule) {
+    if (testExecuting) return;
+    setTestExecuting(true);
+    try {
+      if (schedule.type === "weekly_report" || schedule.id.includes("weekly-report")) {
+        const res = await fetch("/api/weekly-report/execute", { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          showToast("本周周报已成功测试执行并归档！");
+          await load();
+        } else {
+          showToast(data.error ?? "测试执行失败", "error");
+        }
+      } else {
+        const res = await fetch(`/api/schedules/${encodeURIComponent(schedule.id)}/test-execute`, { method: "POST" });
+        const data = await res.json();
+        if (res.ok) {
+          showToast(data.message || "已成功测试发送提醒（不影响主持人轮替）！");
+          await load();
+        } else {
+          showToast(data.error ?? "测试执行失败", "error");
+        }
+      }
+    } catch (err: any) {
+      showToast(err?.message || "测试执行失败", "error");
+    } finally {
+      setTestExecuting(false);
+    }
+  }
+
   function requestSendNow(task: ReminderTask) {
     setConfirmation({ type: "send", task });
   }
@@ -328,6 +360,7 @@ export default function DashboardPage() {
       time: String(form.get("time") ?? ""),
       botId: String(form.get("botId") ?? ""),
       enabled: form.get("enabled") === "on",
+      atAll: form.get("atAll") === "on",
     };
     const name = form.get("name");
     if (name) payload.name = String(name).trim();
@@ -815,10 +848,6 @@ export default function DashboardPage() {
                                       <span>{postponingTaskId === task.id ? "延期中…" : "延期到下周"}</span>
                                     </Button>
                                   )}
-                                  <Button variant="ghost" size="sm" onClick={() => requestSendNow(task)}>
-                                    <Send className="size-3.5" />
-                                    <span>{isKnowledgeMigration || isWeeklyReport ? "立即执行" : "立即发送"}</span>
-                                  </Button>
                                 </div>
                               </td>
                               </tr>
@@ -843,16 +872,14 @@ export default function DashboardPage() {
               <div className="flex items-center justify-between border-b border-border px-6 py-4">
                 <div>
                   <Dialog.Title className="text-base font-semibold leading-none tracking-tight">
-                    {editingSchedule.type === "weekly_report" || editingSchedule.id.includes("weekly-report")
-                      ? "调整周报定时与归档规则"
-                      : "调整定时规则"}
+                    定时任务规则
                   </Dialog.Title>
                   <Dialog.Description className="mt-1.5 text-xs text-muted-foreground">
                     修改后将从下一次计划执行时生效。
                   </Dialog.Description>
                 </div>
                 <Dialog.Close asChild>
-                  <Button variant="ghost" size="sm" aria-label="关闭调整定时规则弹窗">
+                  <Button variant="ghost" size="sm" aria-label="关闭定时任务规则弹窗">
                     关闭
                   </Button>
                 </Dialog.Close>
@@ -953,6 +980,16 @@ export default function DashboardPage() {
                       />
                       <span>允许定时自动执行</span>
                     </label>
+
+                    <label className="flex items-center gap-2.5 sm:col-span-2 text-sm font-normal select-none">
+                      <input
+                        name="atAll"
+                        type="checkbox"
+                        className="size-4 rounded border-input text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                        defaultChecked={Boolean(editingSchedule.atAll)}
+                      />
+                      <span>发送群通知时 @ 所有人</span>
+                    </label>
                   </div>
                 ) : (
                   /* 轮值提醒任务配置表单 */
@@ -1020,6 +1057,16 @@ export default function DashboardPage() {
                       />
                       <span>允许定时派发</span>
                     </label>
+
+                    <label className="flex items-center gap-2.5 sm:col-span-2 text-sm font-normal select-none">
+                      <input
+                        name="atAll"
+                        type="checkbox"
+                        className="size-4 rounded border-input text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                        defaultChecked={Boolean(editingSchedule.atAll)}
+                      />
+                      <span>发送群通知时 @ 所有人</span>
+                    </label>
                   </div>
                 )}
                 <p className="mt-4 text-xs leading-5 text-muted-foreground">
@@ -1027,13 +1074,27 @@ export default function DashboardPage() {
                     ? "周报规则：每次执行自动拉取源模板内容，并在目标知识库按 年份工作汇总/月份/周报 目录结构自动归档。"
                     : "轮值来源：飞书文档/表格。点击“同步飞书名单”后自动刷新最新人员排期。"}
                 </p>
-                <div className="mt-6 flex justify-end gap-2.5 border-t border-border pt-4">
-                  <Button variant="outline" size="sm" type="button" onClick={() => setEditingSchedule(undefined)}>
-                    取消
+                <div className="mt-6 flex flex-wrap items-center justify-between gap-2.5 border-t border-border pt-4">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    type="button"
+                    onClick={() => void handleTestExecuteSchedule(editingSchedule)}
+                    disabled={testExecuting || saving}
+                    className="text-xs text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-900/60 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                    title="立即执行一次（仅测试推送或生成，不影响主持人轮替）"
+                  >
+                    {testExecuting ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : <Play className="mr-1.5 size-3.5" />}
+                    <span>{testExecuting ? "测试执行中…" : "立即执行一次"}</span>
                   </Button>
-                  <Button size="sm" type="submit" disabled={saving}>
-                    {saving ? "保存中…" : "保存"}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="outline" size="sm" type="button" onClick={() => setEditingSchedule(undefined)}>
+                      取消
+                    </Button>
+                    <Button size="sm" type="submit" disabled={saving || testExecuting}>
+                      {saving ? "保存中…" : "保存"}
+                    </Button>
+                  </div>
                 </div>
               </form>
               </Dialog.Content>
@@ -1238,7 +1299,7 @@ function TaskDetailView({
           </Button>
           <Button size="sm" onClick={onEdit}>
             <Settings2 className="size-3.5" />
-            <span>调整规则</span>
+            <span>定时任务规则</span>
           </Button>
         </div>
       </div>
@@ -1460,17 +1521,6 @@ function TaskDetailView({
                               <CalendarPlus className="size-3.5" />
                               <span>{postponingTaskId === task.id ? "延期中…" : "延期到下周"}</span>
                             </Button>
-                            {index === 0 && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => onSendTask(task)}
-                                disabled={reordering}
-                              >
-                                <Send className="size-3.5" />
-                                <span>立即发送</span>
-                              </Button>
-                            )}
                           </div>
                         </td>
                       </tr>
@@ -1858,19 +1908,9 @@ function WeeklyReportTaskDetailView({
             {resettingPostponements ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
             <span>{resettingPostponements ? "恢复中…" : "恢复正常周期"}</span>
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExecuteNow}
-            disabled={executing || !schedule.sourceDocumentId || !schedule.targetFolderId}
-            title="立即读取源模板并在目标知识库创建本周周报"
-          >
-            {executing ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-            <span>{executing ? "生成中…" : "立即执行一次"}</span>
-          </Button>
           <Button size="sm" onClick={onEdit}>
             <Settings2 className="size-3.5" />
-            <span>调整规则</span>
+            <span>定时任务规则</span>
           </Button>
         </div>
       </div>

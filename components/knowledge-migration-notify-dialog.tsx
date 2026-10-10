@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import {
+  AtSign,
   Bell,
   Bot,
   Check,
@@ -11,6 +12,7 @@ import {
   ExternalLink,
   HelpCircle,
   Loader2,
+  Play,
   Send,
   SlidersHorizontal,
   X,
@@ -105,6 +107,7 @@ export function KnowledgeMigrationNotifyDialog({
     dayOfWeek: 5,
     time: "18:00",
     cycleType: "this_week",
+    atAll: false,
   });
 
   // 打开弹窗时拉取最新配置及系统可用机器人
@@ -128,6 +131,7 @@ export function KnowledgeMigrationNotifyDialog({
           setConfig({
             ...loadedConfig,
             cycleType: loadedConfig.cycleType || "this_week",
+            atAll: Boolean(loadedConfig.atAll),
           });
           // 若原本配了自定义 webhookUrl 但没有对应 botId，自动展开高级设置
           if (loadedConfig.webhookUrl && !loadedConfig.botId) {
@@ -185,6 +189,7 @@ export function KnowledgeMigrationNotifyDialog({
           webhookUrl: config.webhookUrl?.trim() || undefined,
           sendMode: config.sendMode || "both",
           cycleType: config.frequency === "daily" ? "yesterday" : config.cycleType || "this_week",
+          atAll: Boolean(config.atAll),
         }),
       });
       const data = await res.json();
@@ -215,7 +220,7 @@ export function KnowledgeMigrationNotifyDialog({
               </div>
               <div>
                 <Dialog.Title className="text-base font-semibold leading-none">
-                  定时发送统计结果到飞书群
+                  定时任务规则
                 </Dialog.Title>
                 <Dialog.Description className="mt-1 text-xs text-muted-foreground">
                   任务：<span className="font-medium text-foreground">{taskName}</span>
@@ -426,6 +431,30 @@ export function KnowledgeMigrationNotifyDialog({
                 </div>
               </div>}
 
+              {/* 发送时 @ 所有人 开关 */}
+              <div className="flex items-center justify-between rounded-xl border border-border/80 bg-muted/30 p-3.5">
+                <div className="space-y-0.5">
+                  <div className="font-medium text-foreground flex items-center gap-1.5">
+                    <AtSign className="size-3.5 text-indigo-500" />
+                    <span>发送通知时 @ 所有人</span>
+                    {config.atAll && (
+                      <Badge variant="outline" className="bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/20 text-[10px]">
+                        已开启
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    推送群卡片时附带 @所有人，确保群内成员能及时收到提醒
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={Boolean(config.atAll)}
+                  onChange={(e) => setConfig({ ...config, atAll: e.target.checked })}
+                  className="size-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+              </div>
+
               {/* 上次发送记录 */}
               <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs flex items-center justify-between text-muted-foreground">
                 <span>上次成功推送时间：</span>
@@ -490,9 +519,9 @@ export function KnowledgeMigrationNotifyDialog({
                   {testing ? (
                     <Loader2 className="mr-1.5 size-3.5 animate-spin" />
                   ) : (
-                    <Send className="mr-1.5 size-3.5 text-indigo-500" />
+                    <Play className="mr-1.5 size-3.5 text-indigo-500" />
                   )}
-                  {testing ? "正在发送…" : "发送测试卡片"}
+                  {testing ? "执行中…" : "立即执行一次"}
                 </Button>
 
                 <div className="flex items-center gap-2">

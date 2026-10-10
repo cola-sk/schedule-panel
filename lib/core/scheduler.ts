@@ -274,11 +274,46 @@ export async function tasksBetween(start: Date, end: Date): Promise<ReminderTask
   const tasks: ReminderTask[] = [];
   const now = new Date();
 
+  // 1. 历史已发生事件记录（由系统已发送、已执行的任务产生，不消失并以已完成状态展示）
+  const recentTasks = getRecentTasks();
+  const sentKeyMap = new Map<string, ReminderTask>();
+
+  for (const hist of recentTasks) {
+    // 排除由 migration 模块独立负责的任务，避免重复
+    if (hist.scheduleId.startsWith("knowledge-migration:")) continue;
+
+    // 日历仅展示定时任务发送，不展示手动发送的记录
+    if (hist.triggerType === "manual") continue;
+
+    const histDate = hist.sentAt || hist.scheduledAt;
+    if (!histDate) continue;
+    const dateKey = chinaDateKey(new Date(histDate));
+    if (dateKey >= startKey && dateKey <= endKey) {
+      const scheduleKey = `${hist.scheduleId}:${dateKey}`;
+      if (!sentKeyMap.has(scheduleKey)) {
+        sentKeyMap.set(scheduleKey, hist);
+      } else {
+        const existing = sentKeyMap.get(scheduleKey)!;
+        const existingTime = new Date(existing.sentAt || existing.scheduledAt).getTime();
+        const currTime = new Date(histDate).getTime();
+        if (currTime > existingTime) {
+          sentKeyMap.set(scheduleKey, hist);
+        }
+      }
+    }
+  }
+
+  // 将历史已发生的事件加入 tasks 列表
+  for (const sentTask of sentKeyMap.values()) {
+    tasks.push(sentTask);
+  }
+
   for (const schedule of schedules) {
-    // 1. 被延期的周期（展示为已延期卡片）
+    // 2. 被延期的周期（展示为已延期卡片）
     const postponedSet = new Set(schedule.postponedDates ?? []);
     postponedSet.forEach((dateKey) => {
       if (dateKey >= startKey && dateKey <= endKey) {
+        if (sentKeyMap.has(`${schedule.id}:${dateKey}`)) return;
         const fakeDate = new Date(`${dateKey}T${schedule.time}:00+08:00`);
         tasks.push({
           id: `${schedule.id}-${fakeDate.toISOString()}-postponed`,
@@ -291,11 +326,17 @@ export async function tasksBetween(start: Date, end: Date): Promise<ReminderTask
       }
     });
 
-    // 2. 定时任务排期推算（仅展示基于定时规则生成的排期任务，不包含手动执行历史）
+    // 3. 定时任务排期推算（对已发生历史的日期不再重复添加待办事件）
     const projected = await upcomingTasksForSchedule(schedule, 50, now, holidays, CATCHUP_WINDOW_MS);
     projected.forEach((task) => {
       const taskDateKey = chinaDateKey(new Date(task.scheduledAt));
-      if (taskDateKey >= startKey && taskDateKey <= endKey && !postponedSet.has(taskDateKey)) {
+      const scheduleKey = `${schedule.id}:${taskDateKey}`;
+      if (
+        taskDateKey >= startKey &&
+        taskDateKey <= endKey &&
+        !postponedSet.has(taskDateKey) &&
+        !sentKeyMap.has(scheduleKey)
+      ) {
         tasks.push(task);
       }
     });

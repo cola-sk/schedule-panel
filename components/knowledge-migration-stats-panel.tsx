@@ -17,6 +17,7 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  Settings2,
   Sparkles,
   TrendingUp,
   User,
@@ -68,12 +69,15 @@ export function KnowledgeMigrationStatsPanel({
   notifySchedule,
   onNotifyConfigSaved,
 }: KnowledgeMigrationStatsPanelProps) {
-  const [selectedWeek, setSelectedWeek] = useState<string>("all");
+  // 默认展示统计数据中的最近一个自然周；选择“全部自然周”时使用显式的 all 值。
+  const [selectedWeek, setSelectedWeek] = useState<string>("");
   const [selectedOrigin, setSelectedOrigin] = useState<string>("all"); // "all" | "external_feishu" | "wiki_migration"
   const [selectedPerson, setSelectedPerson] = useState<string>("all");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [expandedWeeks, setExpandedWeeks] = useState<Record<string, boolean>>({});
   const [notifyDialogOpen, setNotifyDialogOpen] = useState<boolean>(false);
+
+  const displaySelectedWeek = selectedWeek || stats?.weeks?.[0]?.weekKey || "all";
 
   // 默认展开最近一周
   const toggleWeek = (weekKey: string) => {
@@ -102,7 +106,7 @@ export function KnowledgeMigrationStatsPanel({
 
     return stats.weeks
       .filter((week) => {
-        if (selectedWeek !== "all" && week.weekKey !== selectedWeek) return false;
+        if (displaySelectedWeek !== "all" && week.weekKey !== displaySelectedWeek) return false;
         return true;
       })
       .map((week) => {
@@ -153,7 +157,7 @@ export function KnowledgeMigrationStatsPanel({
         };
       })
       .filter((w) => w.items.length > 0 || (selectedOrigin === "all" && selectedPerson === "all" && !searchKeyword));
-  }, [stats?.weeks, selectedWeek, selectedOrigin, selectedPerson, searchKeyword]);
+  }, [stats?.weeks, displaySelectedWeek, selectedOrigin, selectedPerson, searchKeyword]);
 
   // 人员贡献排行榜（排除机器人与系统归档）
   const humanRank = useMemo(() => {
@@ -199,7 +203,7 @@ export function KnowledgeMigrationStatsPanel({
 
   // 点击周度柱状图联动筛选
   const handleSelectWeek = (weekKey: string) => {
-    setSelectedWeek(selectedWeek === weekKey ? "all" : weekKey);
+    setSelectedWeek(displaySelectedWeek === weekKey ? "all" : weekKey);
     setTimeout(() => {
       const el = document.getElementById("weekly-details-section");
       if (el) {
@@ -261,8 +265,8 @@ export function KnowledgeMigrationStatsPanel({
                 onClick={() => setNotifyDialogOpen(true)}
                 className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950/40"
               >
-                <Bell className="mr-1.5 size-3.5 text-indigo-500" />
-                定时群推送
+                <Settings2 className="mr-1.5 size-3.5 text-indigo-500" />
+                定时任务规则
               </Button>
               <Button
                 size="sm"
@@ -463,7 +467,7 @@ export function KnowledgeMigrationStatsPanel({
                       tabIndex={0}
                       onClick={() => handleSelectWeek(week.weekKey)}
                       className={`group flex flex-col gap-1 rounded-md p-1.5 transition-colors cursor-pointer ${
-                        selectedWeek === week.weekKey
+                        displaySelectedWeek === week.weekKey
                           ? "bg-indigo-50/80 ring-1 ring-indigo-400 dark:bg-indigo-950/40"
                           : "hover:bg-secondary/40"
                       }`}
@@ -591,7 +595,7 @@ export function KnowledgeMigrationStatsPanel({
 
                 <select
                   className="rounded-md border border-input bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                  value={selectedWeek}
+                  value={displaySelectedWeek}
                   onChange={(e) => setSelectedWeek(e.target.value)}
                 >
                   <option value="all">全部自然周</option>
@@ -626,7 +630,7 @@ export function KnowledgeMigrationStatsPanel({
                 </select>
               </div>
 
-              {(selectedWeek !== "all" ||
+              {(displaySelectedWeek !== "all" ||
                 selectedOrigin !== "all" ||
                 selectedPerson !== "all" ||
                 searchKeyword) && (
@@ -665,9 +669,9 @@ export function KnowledgeMigrationStatsPanel({
                         </button>
                       </Badge>
                     )}
-                    {selectedWeek !== "all" && (
+                    {displaySelectedWeek !== "all" && (
                       <Badge variant="secondary" className="gap-1">
-                        自然周: {selectedWeek}
+                        自然周: {displaySelectedWeek}
                         <button
                           type="button"
                           className="ml-0.5 hover:text-red-500 font-bold"
@@ -710,7 +714,7 @@ export function KnowledgeMigrationStatsPanel({
                     size="sm"
                     className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground"
                     onClick={() => {
-                      setSelectedWeek("all");
+                      setSelectedWeek("");
                       setSelectedOrigin("all");
                       setSelectedPerson("all");
                       setSearchKeyword("");
@@ -805,17 +809,20 @@ export function KnowledgeMigrationStatsPanel({
                         </div>
                       </div>
 
-                      {/* 本周总量统计徽标 */}
-                      <div className="flex items-center gap-2">
-                        <Badge className="bg-indigo-600 hover:bg-indigo-700 text-white font-mono text-xs">
+                      {/* 本周总量统计 */}
+                      <div
+                        className="flex cursor-default select-none items-center gap-2"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <span className="font-mono text-xs text-indigo-600 dark:text-indigo-400">
                           非 Wiki: {week.nonWikiCount} 篇
-                        </Badge>
-                        <Badge variant="outline" className="border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-300 font-mono text-xs">
+                        </span>
+                        <span className="font-mono text-xs text-blue-700 dark:text-blue-300">
                           Wiki: {week.wikiCount} 篇
-                        </Badge>
-                        <Badge variant="secondary" className="font-mono text-xs">
+                        </span>
+                        <span className="font-mono text-xs text-muted-foreground">
                           总计: {week.totalCount} 篇
-                        </Badge>
+                        </span>
                       </div>
                     </CardHeader>
 

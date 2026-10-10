@@ -135,8 +135,11 @@ async function listAllFeishuNodes(spaceId: string, rootWikiToken: string): Promi
 
 export function isBotOrSystemAccount(name: string, userId?: string): boolean {
   if (name === "Wiki 归档系统") return true;
-  if (userId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") return true;
   if (name.includes("8eb8") || name.includes("机器人") || name.toLowerCase().includes("bot")) return true;
+  // 只有当名字未明确或带有系统成员特征，且 userId 属于迁移机器人时才判定为机器人
+  if (userId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+    if (!name || name === "飞书成员" || name === "未知成员" || name === "迁移机器人") return true;
+  }
   return false;
 }
 
@@ -331,13 +334,18 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
 
     // 确定创建人/迁移人姓名
     let personName = "未知成员";
-    const creatorId = node.creator || node.owner;
+    let creatorId = node.creator || node.owner;
 
     if (isWiki) {
       personName =
         matchedWiki?.approvedBy?.trim() ||
         task.config.defaultOperatorName?.trim() ||
         "Wiki 归档系统";
+      // 若是真实成员审批的归档文档，不要将飞书 OpenAPI 机器人的 open_id 作为该成员的 creatorId
+      if (personName !== "Wiki 归档系统" && creatorId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+        const matchedUserId = Object.entries(userNameMap).find(([, name]) => name === personName)?.[0];
+        creatorId = matchedUserId || undefined;
+      }
     } else {
       personName = (creatorId ? userNameMap[creatorId] : undefined) || "飞书成员";
     }
@@ -414,6 +422,13 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
       const pName = item.creatorName;
       if (!personMap.has(pName)) {
         personMap.set(pName, { nonWiki: 0, wiki: 0, userId: item.creatorId, catMap: new Map() });
+      } else {
+        const existing = personMap.get(pName)!;
+        if (!existing.userId || existing.userId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+          if (item.creatorId && item.creatorId !== "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+            existing.userId = item.creatorId;
+          }
+        }
       }
       const pStat = personMap.get(pName)!;
       if (item.origin === "wiki_migration") {
@@ -460,6 +475,13 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
     const pName = doc.creatorName;
     if (!globalPersonMap.has(pName)) {
       globalPersonMap.set(pName, { nonWiki: 0, wiki: 0, userId: doc.creatorId, catMap: new Map() });
+    } else {
+      const existing = globalPersonMap.get(pName)!;
+      if (!existing.userId || existing.userId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+        if (doc.creatorId && doc.creatorId !== "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+          existing.userId = doc.creatorId;
+        }
+      }
     }
     const stat = globalPersonMap.get(pName)!;
     if (doc.origin === "wiki_migration") {
@@ -590,6 +612,13 @@ export function computeCycleStats(
     const pName = item.creatorName;
     if (!personMap.has(pName)) {
       personMap.set(pName, { nonWiki: 0, wiki: 0, userId: item.creatorId, catMap: new Map() });
+    } else {
+      const existing = personMap.get(pName)!;
+      if (!existing.userId || existing.userId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+        if (item.creatorId && item.creatorId !== "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+          existing.userId = item.creatorId;
+        }
+      }
     }
     const pStat = personMap.get(pName)!;
     if (item.origin === "wiki_migration") {

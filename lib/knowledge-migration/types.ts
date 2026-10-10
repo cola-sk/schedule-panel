@@ -193,6 +193,7 @@ export interface TaskNotifyConfig {
   cycleType?: StatCycleType;
   lastSentAt?: string;
   sendMode?: "both" | "image_only" | "text_only"; // 图文一起发送 (默认 both) | 仅发送长图 | 仅发送文字卡片
+  atAll?: boolean; // 发送通知时是否 @ 所有人
 }
 
 export interface KnowledgeMigrationTask {

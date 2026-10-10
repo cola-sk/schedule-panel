@@ -3,6 +3,7 @@ import { FeishuMessagePayload } from "../../core/types";
 export interface WeeklyReportNotificationContext {
   title: string;
   documentUrl: string;
+  atAll?: boolean;
 }
 
 /**
@@ -11,6 +12,7 @@ export interface WeeklyReportNotificationContext {
 export function buildWeeklyReportNotification(
   context: WeeklyReportNotificationContext,
 ): FeishuMessagePayload {
+  const atAllPrefix = context.atAll ? "<at id=all></at>\n" : "";
   return {
     msg_type: "interactive",
     card: {
@@ -29,7 +31,7 @@ export function buildWeeklyReportNotification(
           tag: "div",
           text: {
             tag: "lark_md",
-            content: "本周周报已准备好，请大家及时补充本周工作进展、风险事项和下周计划。",
+            content: `${atAllPrefix}本周周报已准备好，请大家及时补充本周工作进展、风险事项和下周计划。`,
           },
         },
         {

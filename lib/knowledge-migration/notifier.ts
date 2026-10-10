@@ -3,7 +3,7 @@ import fs from "fs";
 import { sendWebhookMessage } from "@/lib/core/feishu-client";
 import { atShanghaiLocal, chinaDateKey, chinaWeekday } from "@/lib/core/scheduler";
 import { generateMigrationWeeklyStats, computeCycleStats, computeSubdirectoryStats } from "./stats";
-import { getBot } from "@/lib/core/store";
+import { getBot, recordTask } from "@/lib/core/store";
 import { getFeishuClient } from "@/lib/mcp/feishu-doc-engine";
 import { renderStatsDashboardImage } from "./image-generator";
 import {
@@ -65,37 +65,92 @@ function hasSentScheduledOccurrence(config: TaskNotifyConfig, scheduledAt: Date)
 }
 
 /**
- * 生成指定区间内的知识库统计通知日历项。
- * 只展示当前时刻之后的执行计划，计算规则与 Cron 派发使用的规则保持一致。
+ * 生成指定区间内的知识库统计通知日历项（包含已发送的历史事件与未来的排期计划）。
  */
 export function migrationStatsTasksBetween(start: Date, end: Date, now = new Date()): ReminderTask[] {
-  if (start.getTime() > end.getTime() || end.getTime() < now.getTime()) return [];
+  if (start.getTime() > end.getTime()) return [];
 
-  const baseline = new Date(Math.max(now.getTime(), start.getTime() - 1));
+  const startKey = chinaDateKey(start);
+  const endKey = chinaDateKey(end);
   const calendarTasks: ReminderTask[] = [];
 
   for (const task of getTasks()) {
-    if (!task.notifyConfig?.enabled) continue;
-    const firstRunAt = getNextMigrationStatsRunAt(task.notifyConfig, baseline);
-    if (!firstRunAt) continue;
+    if (!task.notifyConfig?.enabled && (!task.auditLogs || task.auditLogs.length === 0)) continue;
 
-    const intervalDays = task.notifyConfig.frequency === "daily" ? 1 : 7;
-    let occurrence = new Date(firstRunAt);
-    let guard = 0;
-    while (occurrence.getTime() <= end.getTime() && guard < 400) {
-      guard += 1;
-      if (occurrence.getTime() >= start.getTime()) {
-        calendarTasks.push({
-          id: `knowledge-migration:${task.id}:${occurrence.toISOString()}`,
-          scheduleId: `knowledge-migration:${task.id}`,
-          scheduleName: `知识库统计 · ${task.name}`,
-          host: { name: "系统自动" },
-          scheduledAt: occurrence.toISOString(),
-          status: "pending",
-          content: "生成知识库归档统计并发送飞书通知",
-        });
+    const sentKeyMap = new Map<string, ReminderTask>();
+
+    // 1. 提取历史已发生的通知推送记录（从 auditLogs 中解析成功推送到飞书群的记录）
+    for (const log of task.auditLogs || []) {
+      if (!log.detail || !log.detail.includes("推送到飞书群")) continue;
+      // 日历仅展示定时任务发送，不展示手动发送/测试发送的记录
+      if (log.detail.includes("手动") || log.detail.includes("测试")) continue;
+      const logDate = new Date(log.createdAt);
+      if (Number.isNaN(logDate.getTime())) continue;
+      const dateKey = chinaDateKey(logDate);
+      const triggerType: "scheduled" | "manual" = "scheduled";
+      if (dateKey >= startKey && dateKey <= endKey) {
+        // 同一自然日若有多次推送，保留最新一条展示
+        if (!sentKeyMap.has(dateKey)) {
+          sentKeyMap.set(dateKey, {
+            id: `knowledge-migration:${task.id}:${log.id || log.createdAt}`,
+            scheduleId: `knowledge-migration:${task.id}`,
+            scheduleName: `知识库统计 · ${task.name}`,
+            host: { name: "定时任务" },
+            scheduledAt: log.createdAt,
+            sentAt: log.createdAt,
+            status: "sent",
+            triggerType,
+            content: log.detail,
+          });
+        } else {
+          const prev = sentKeyMap.get(dateKey)!;
+          if (new Date(log.createdAt).getTime() > new Date(prev.sentAt || prev.scheduledAt).getTime()) {
+            sentKeyMap.set(dateKey, {
+              id: `knowledge-migration:${task.id}:${log.id || log.createdAt}`,
+              scheduleId: `knowledge-migration:${task.id}`,
+              scheduleName: `知识库统计 · ${task.name}`,
+              host: { name: "定时任务" },
+              scheduledAt: log.createdAt,
+              sentAt: log.createdAt,
+              status: "sent",
+              triggerType,
+              content: log.detail,
+            });
+          }
+        }
       }
-      occurrence = new Date(occurrence.getTime() + intervalDays * 24 * 60 * 60 * 1000);
+    }
+
+    for (const sentTask of sentKeyMap.values()) {
+      calendarTasks.push(sentTask);
+    }
+
+    // 2. 推算未来的待执行排期（已发生历史推送的自然日不再重复显示待办排期）
+    if (task.notifyConfig?.enabled && end.getTime() >= now.getTime()) {
+      const baseline = new Date(Math.max(now.getTime(), start.getTime() - 1));
+      const firstRunAt = getNextMigrationStatsRunAt(task.notifyConfig, baseline);
+      if (firstRunAt) {
+        const intervalDays = task.notifyConfig.frequency === "daily" ? 1 : 7;
+        let occurrence = new Date(firstRunAt);
+        let guard = 0;
+        while (occurrence.getTime() <= end.getTime() && guard < 400) {
+          guard += 1;
+          const occDateKey = chinaDateKey(occurrence);
+          if (occurrence.getTime() >= start.getTime() && !sentKeyMap.has(occDateKey)) {
+            calendarTasks.push({
+              id: `knowledge-migration:${task.id}:${occurrence.toISOString()}`,
+              scheduleId: `knowledge-migration:${task.id}`,
+              scheduleName: `知识库统计 · ${task.name}`,
+              host: { name: "定时任务" },
+              scheduledAt: occurrence.toISOString(),
+              status: "pending",
+              triggerType: "scheduled",
+              content: `按计划将基于所选周期生成知识库全量与重点子目录统计，并推送到关联飞书群`,
+            });
+          }
+          occurrence = new Date(occurrence.getTime() + intervalDays * 24 * 60 * 60 * 1000);
+        }
+      }
     }
   }
 
@@ -112,6 +167,7 @@ export function buildMigrationStatsCard(
   webAppUrl?: string,
   imageKey?: string,
   cycleStats?: CycleStatsResult,
+  atAll?: boolean,
 ): FeishuMessagePayload {
   const effectiveCycle = cycleStats || computeCycleStats(stats, "this_week");
   const cycleLabel = effectiveCycle.cycleLabel;
@@ -180,6 +236,17 @@ export function buildMigrationStatsCard(
         },
       },
       elements: [
+        ...(atAll
+          ? [
+              {
+                tag: "div",
+                text: {
+                  tag: "lark_md",
+                  content: "<at id=all></at>",
+                },
+              },
+            ]
+          : []),
         {
           tag: "div",
           fields: [
@@ -275,6 +342,8 @@ export async function sendTaskStatsNotification(
   webhookUrlOverride?: string,
   sendModeOverride?: "both" | "image_only" | "text_only",
   cycleTypeOverride?: StatCycleType,
+  atAllOverride?: boolean,
+  triggerType: "scheduled" | "manual" = "scheduled",
 ): Promise<{ ok: boolean; message: string; stats?: TaskMigrationStats; imageKey?: string }> {
   const task = getTask(taskId);
   if (!task) throw new Error("任务不存在");
@@ -297,6 +366,7 @@ export async function sendTaskStatsNotification(
 
   const sendMode = sendModeOverride || task.notifyConfig?.sendMode || "both";
   const cycleType = cycleTypeOverride || task.notifyConfig?.cycleType || (task.notifyConfig?.frequency === "daily" ? "yesterday" : "this_week");
+  const atAll = atAllOverride !== undefined ? atAllOverride : Boolean(task.notifyConfig?.atAll);
 
   // 1. 生成最新全量统计数据与选定周期的贡献榜统计
   const stats = await generateMigrationWeeklyStats(taskId);
@@ -331,12 +401,49 @@ export async function sendTaskStatsNotification(
     if (!imageKey) {
       throw new Error("未能生成并获取飞书图片凭据");
     }
-    await sendWebhookMessage(targetWebhook, {
-      msg_type: "image",
-      content: {
-        image_key: imageKey,
-      },
-    });
+    if (atAll) {
+      await sendWebhookMessage(targetWebhook, {
+        msg_type: "interactive",
+        card: {
+          config: {
+            wide_screen_mode: true,
+          },
+          header: {
+            template: "blue",
+            title: {
+              tag: "plain_text",
+              content: `${task.name} 知识库迁移/贡献统计`,
+            },
+          },
+          elements: [
+            {
+              tag: "div",
+              text: {
+                tag: "lark_md",
+                content: "<at id=all></at>",
+              },
+            },
+            {
+              tag: "img",
+              img_key: imageKey,
+              alt: {
+                tag: "plain_text",
+                content: "📊 知识库总量与重点子目录贡献统计",
+              },
+              mode: "fit_horizontal",
+              preview: true,
+            },
+          ],
+        },
+      });
+    } else {
+      await sendWebhookMessage(targetWebhook, {
+        msg_type: "image",
+        content: {
+          image_key: imageKey,
+        },
+      });
+    }
   } else {
     const cardPayload = buildMigrationStatsCard(
       stats,
@@ -345,6 +452,7 @@ export async function sendTaskStatsNotification(
       undefined,
       imageKey,
       cycleStats,
+      atAll,
     );
     await sendWebhookMessage(targetWebhook, cardPayload);
   }
@@ -365,10 +473,28 @@ export async function sendTaskStatsNotification(
       ? "图文卡片（含统计图）"
       : "仅发送文字卡片";
 
+  const triggerPrefix = triggerType === "manual" ? "手动测试" : "定时任务";
+  const pushDetail = `[${triggerPrefix}] 已成功将归档统计与贡献榜推送到飞书群（模式：${modeDesc}，周期：${cycleStats.cycleLabel}）：Wiki 完成迁移 ${stats.totalWikiDocs} 篇，非Wiki文档贡献 ${stats.totalNonWikiDocs} 篇（${cycleStats.cycleShortLabel}贡献 ${cycleStats.nonWikiCount} 篇）`;
   addTaskAuditLog(taskId, {
     action: "stats_generated" as any,
-    detail: `已成功将归档统计与贡献榜推送到飞书群（模式：${modeDesc}，周期：${cycleStats.cycleLabel}）：Wiki 完成迁移 ${stats.totalWikiDocs} 篇，非Wiki文档贡献 ${stats.totalNonWikiDocs} 篇（${cycleStats.cycleShortLabel}贡献 ${cycleStats.nonWikiCount} 篇）`,
+    detail: pushDetail,
   });
+  try {
+    recordTask({
+      id: `knowledge-migration:${task.id}:${sendTime}`,
+      scheduleId: `knowledge-migration:${task.id}`,
+      scheduleName: `知识库统计 · ${task.name}`,
+      host: { name: triggerType === "manual" ? "手动触发" : "定时任务" },
+      scheduledAt: sendTime,
+      sentAt: sendTime,
+      status: "sent",
+      triggerType,
+      botId: task.notifyConfig?.botId,
+      content: pushDetail,
+    });
+  } catch {
+    // ignore
+  }
   persistMigrationState();
 
   return {

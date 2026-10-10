@@ -302,6 +302,7 @@ export async function executeWeeklyReportTask(
       const payload = buildWeeklyReportNotification({
         title: weekTitle,
         documentUrl: docUrl,
+        atAll: schedule?.atAll,
       });
       try {
         await sendWebhookMessage(bot.webhookUrl, payload);

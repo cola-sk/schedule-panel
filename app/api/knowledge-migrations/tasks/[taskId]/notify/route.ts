@@ -30,6 +30,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       time: "18:00", // 默认下午6点
       sendMode: "both",
       cycleType: "this_week",
+      atAll: false,
     };
 
     return NextResponse.json({
@@ -67,6 +68,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       time: "18:00",
       sendMode: "both",
       cycleType: "this_week",
+      atAll: false,
     };
 
     const frequency = body.frequency === "daily" || body.frequency === "weekly"
@@ -85,6 +87,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           ? body.cycleType
           : prevConfig.cycleType === "yesterday" ? "this_week" : prevConfig.cycleType || "this_week",
       sendMode: body.sendMode || prevConfig.sendMode || "both",
+      atAll: body.atAll !== undefined ? Boolean(body.atAll) : Boolean(prevConfig.atAll),
       lastSentAt: prevConfig.lastSentAt,
     };
 
@@ -107,16 +110,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let targetOverride: string | undefined;
     let sendModeOverride: "both" | "image_only" | "text_only" | undefined;
     let cycleTypeOverride: TaskNotifyConfig["cycleType"] | undefined;
+    let atAllOverride: boolean | undefined;
     try {
       const body = await request.json();
       targetOverride = body?.botId || body?.webhookUrl;
       sendModeOverride = body?.sendMode;
       cycleTypeOverride = body?.cycleType;
+      if (body?.atAll !== undefined) atAllOverride = Boolean(body.atAll);
     } catch {
       // ignore empty body
     }
 
-    const result = await sendTaskStatsNotification(taskId, targetOverride, sendModeOverride, cycleTypeOverride);
+    const result = await sendTaskStatsNotification(
+      taskId,
+      targetOverride,
+      sendModeOverride,
+      cycleTypeOverride,
+      atAllOverride,
+      "manual"
+    );
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(

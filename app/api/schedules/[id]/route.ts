@@ -35,6 +35,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (documentId !== undefined) changes.documentId = documentId;
   if (sourceDocumentId !== undefined) changes.sourceDocumentId = sourceDocumentId;
   if (targetFolderId !== undefined) changes.targetFolderId = targetFolderId;
+  if (body.atAll !== undefined) changes.atAll = Boolean(body.atAll);
 
   updateSchedule(id, changes);
 

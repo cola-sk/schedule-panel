@@ -420,32 +420,21 @@ export function parseMarkdownToDocxBlocks(markdown: string, options?: DocumentWr
     // 空行跳过
     if (!trimmed) continue;
 
-    // Images used by the knowledge migration are emitted as a standalone
-    // Markdown image marker.  Keep the asset metadata private until after the
-    // image block exists in Feishu; the media API requires that block ID as
-    // its parent_node.
-    // Turndown sometimes preserves a Confluence image wrapped in bold or
-    // italic markup (for example **![diagram](confluence-image://0)**).
-    // The image is still a standalone element semantically, so unwrap that
-    // decoration before creating the native Docx image block.
-    const imageMatch = trimmed.match(/^(?:\*\*|__|\*|_)?!\[([^\]]*)\]\(([^)]+)\)(?:\*\*|__|\*|_)?$/);
-    if (imageMatch) {
-      const asset = options?.images?.get(imageMatch[2]);
-      if (asset) {
+    // Confluence images are sometimes wrapped by a list item, numeric prefix,
+    // bold text, or a link.  Treat every internal migration marker on such a
+    // line as a native image, rather than requiring an exact `![](...)` line.
+    // This preserves e.g. `[![](confluence-image://0)](url)` and
+    // `1. **![](confluence-image://0)**`.
+    const imageMatches = [...trimmed.matchAll(/!\[([^\]]*)\]\(([^)]+)\)/g)];
+    const imageAssets = imageMatches.map((match) => options?.images?.get(match[2]));
+    if (imageMatches.length > 0 && imageAssets.every(Boolean)) {
+      for (const asset of imageAssets as DocxImageAsset[]) {
         blocks.push({
           block_type: 27, // image
           image: {
             ...(asset.alt ? { caption: { content: asset.alt } } : {}),
           },
           __imageAsset: asset,
-        });
-      } else {
-        // Do not silently discard arbitrary Markdown images in existing users
-        // of this generic writer.  Only our internal migration markers are
-        // handled as image blocks.
-        blocks.push({
-          block_type: 2,
-          text: { elements: parseInlineElements(rawLine) },
         });
       }
       continue;
@@ -473,6 +462,21 @@ export function parseMarkdownToDocxBlocks(markdown: string, options?: DocumentWr
         .map(splitMarkdownTableRow);
       if (rows.length && rows[0].length) {
         const columnSize = Math.max(...rows.map((row) => row.length));
+        // The descendant API accepts at most 1,000 blocks.  A table needs a
+        // table block plus a cell and text block for every cell, so retain
+        // genuinely large tables as readable code chunks instead of sending
+        // an invalid multi-thousand-block request.
+        if (rows.length * columnSize > 450) {
+          const tableText = rows.map((row) => row.join(" | ")).join("\n");
+          for (let start = 0; start < tableText.length; start += 6000) {
+            blocks.push({
+              block_type: 14,
+              code: { elements: [{ text_run: { content: tableText.slice(start, start + 6000) } }] },
+            });
+          }
+          i = cursor - 1;
+          continue;
+        }
         blocks.push({
           block_type: 31,
           table: {
@@ -1229,6 +1233,9 @@ export async function appendDocumentContent(
     }
     await flushRegularBlocks();
     await appendTableBlock(client, documentId, block.table.property, block.table.__rows);
+    // Table creation is also a document edit.  Spacing consecutive table
+    // requests keeps table-heavy Wiki pages below Feishu's edit-rate limit.
+    await new Promise<void>((resolve) => setTimeout(resolve, 400));
     totalAppended += 1;
   }
   await flushRegularBlocks();
@@ -1321,15 +1328,21 @@ async function appendTableBlock(
       text: { elements: parseInlineElements(rows[Math.floor(index / property.column_size)]?.[index % property.column_size] || "") },
     })),
   ];
-  try {
-    const createRes = await client.docx.documentBlockDescendant.create({
-      path: { document_id: documentId, block_id: documentId },
-      data: { children_id: [tableId], descendants, index: -1 },
-    });
-    if (createRes.code !== 0) throw createRes;
-  } catch (error: any) {
-    throw new Error(formatLarkError(error, `创建飞书表格失败 (document_id: ${documentId})`));
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      const createRes = await client.docx.documentBlockDescendant.create({
+        path: { document_id: documentId, block_id: documentId },
+        data: { children_id: [tableId], descendants, index: -1 },
+      });
+      if (createRes.code !== 0) throw createRes;
+      return;
+    } catch (error: any) {
+      lastError = error;
+      if (attempt < 3) await new Promise<void>((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+    }
   }
+  throw new Error(formatLarkError(lastError, `创建飞书表格失败 (document_id: ${documentId})`));
 }
 
 /**

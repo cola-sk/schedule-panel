@@ -744,20 +744,6 @@ export function KnowledgeMigrationDashboard() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setViewMode("workbench")}
-                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
-                  viewMode === "workbench"
-                    ? "bg-primary text-primary-foreground shadow-xs"
-                    : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
-                }`}
-              >
-                <Folder className="size-3.5" />
-                <span>归档工作台</span>
-                <span className="font-mono text-[10px] opacity-80">({currentTask.overview?.total || 0} 篇)</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={() => {
                   setViewMode("stats");
                   if (activeTaskId) void loadTaskStats(activeTaskId);
@@ -797,6 +783,20 @@ export function KnowledgeMigrationDashboard() {
               >
                 <FolderInput className="size-3.5" />
                 <span>其他目录整理</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setViewMode("workbench")}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                  viewMode === "workbench"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                <Folder className="size-3.5" />
+                <span>归档工作台</span>
+                <span className="font-mono text-[10px] opacity-80">({currentTask.overview?.total || 0} 篇)</span>
               </button>
             </div>
           </div>

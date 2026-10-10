@@ -34,7 +34,9 @@ export async function GET(request: NextRequest) {
   // 先生成任务再读取假期，避免首次查询某个年份时并发写入同一份缓存。
   const scheduledTasks = await tasksBetween(start, end);
   const migrationTasks = migrationStatsTasksBetween(start, end);
-  const tasks = [...scheduledTasks, ...migrationTasks].sort((left, right) => left.scheduledAt.localeCompare(right.scheduledAt));
+  const tasks = [...scheduledTasks, ...migrationTasks]
+    .filter((task) => task.triggerType !== "manual")
+    .sort((left, right) => left.scheduledAt.localeCompare(right.scheduledAt));
   const holidays = await getChineseHolidays(years);
   return NextResponse.json({ tasks, holidays });
 }
