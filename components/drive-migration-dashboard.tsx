@@ -510,6 +510,8 @@ export function DriveMigrationDashboard() {
 
   // 任务提交中状态（防止快速连续点击提交）
   const [isSubmittingTask, setIsSubmittingTask] = useState(false);
+  const submittingTokensRef = useRef<Set<string>>(new Set());
+  const isSubmittingBatchRef = useRef<boolean>(false);
 
   // Toast 提示
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -877,6 +879,21 @@ export function DriveMigrationDashboard() {
     return tasks.find((t) => t.status === "running" || t.status === "pending");
   }, [tasks]);
 
+  // 当前处于后台执行中或排队中的文档 token 集合
+  const runningTaskTokens = useMemo(() => {
+    const tokens = new Set<string>();
+    tasks.forEach((t) => {
+      if (t.status === "running" || t.status === "pending") {
+        t.items.forEach((item) => {
+          if (item.status === "pending" || item.status === "migrating") {
+            tokens.add(item.token);
+          }
+        });
+      }
+    });
+    return tokens;
+  }, [tasks]);
+
   // 清空已完成任务历史
   async function handleClearCompletedTasks() {
     try {
@@ -1173,10 +1190,17 @@ export function DriveMigrationDashboard() {
 
   // 单个文档提交后台异步迁移
   async function handleMigrateSingle(file: DriveFileItem) {
+    // 同步防重锁：若正在提交或后台已有该文档的活跃任务，立即拦截
+    if (submittingTokensRef.current.has(file.token) || runningTaskTokens.has(file.token)) {
+      showToast(`「${file.name}」已在后台迁移中，请勿重复操作`, "error");
+      return;
+    }
+    submittingTokensRef.current.add(file.token);
+    setIsSubmittingTask(true);
+
     const targetParentToken = getResolvedTargetToken(file.token);
 
     try {
-      setIsSubmittingTask(true);
       const res = await fetch("/api/drive-migration/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1198,11 +1222,16 @@ export function DriveMigrationDashboard() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "启动后台迁移失败");
 
-      showToast(`已提交「${file.name}」至后台迁移，正在后台运行，您可继续正常操作。`);
+      if (data.isNew === false) {
+        showToast(`「${file.name}」已在后台任务中运行，无需重复提交。`);
+      } else {
+        showToast(`已提交「${file.name}」至后台迁移，正在后台运行，您可继续正常操作。`);
+      }
       void fetchTasks();
     } catch (err: any) {
       showToast(`启动迁移失败: ${err.message}`, "error");
     } finally {
+      submittingTokensRef.current.delete(file.token);
       setIsSubmittingTask(false);
     }
   }
@@ -1213,16 +1242,17 @@ export function DriveMigrationDashboard() {
 
   // 迁移整个目录（一键提交当前目录下所有待迁移文档至后台）
   async function handleMigrateFolder(node: DriveTreeNode) {
+    if (isSubmittingBatchRef.current) return;
     if (!scanResult?.files) return;
     const allFilesMap = new Map(scanResult.files.map((f) => [f.token, f]));
 
     const pendingTokens = node.allDescendantFileTokens.filter((token) => {
       const st = getFileState(token).status;
-      return st === "pending" || st === "failed";
+      return (st === "pending" || st === "failed") && !runningTaskTokens.has(token);
     });
 
     if (pendingTokens.length === 0) {
-      showToast(`目录「${node.name}」下没有待迁移的文档`, "error");
+      showToast(`目录「${node.name}」下没有待迁移的文档（或已全部在迁移中）`, "error");
       return;
     }
 
@@ -1239,6 +1269,7 @@ export function DriveMigrationDashboard() {
       .filter(Boolean) as DriveFileItem[];
 
     try {
+      isSubmittingBatchRef.current = true;
       setIsSubmittingTask(true);
       const payloadItems = itemsToMigrate.map((f) => ({
         token: f.token,
@@ -1266,6 +1297,7 @@ export function DriveMigrationDashboard() {
     } catch (err: any) {
       showToast(`提交目录迁移失败: ${err.message}`, "error");
     } finally {
+      isSubmittingBatchRef.current = false;
       setIsSubmittingTask(false);
     }
   }
@@ -1376,21 +1408,23 @@ export function DriveMigrationDashboard() {
 
   // 批量执行已勾选文档后台异步迁移
   async function handleExecuteBatchMigration() {
+    if (isSubmittingBatchRef.current) return;
     if (selectedTokens.size === 0) {
       showToast("请先在列表中勾选要迁移的文档", "error");
       return;
     }
 
-    const itemsToMigrate = (scanResult?.files || []).filter((f) =>
-      selectedTokens.has(f.token),
+    const itemsToMigrate = (scanResult?.files || []).filter(
+      (f) => selectedTokens.has(f.token) && !runningTaskTokens.has(f.token),
     );
 
     if (itemsToMigrate.length === 0) {
-      showToast("未找到选中的有效文档", "error");
+      showToast("选中的文档已全部在后台迁移中，无需重复操作", "error");
       return;
     }
 
     try {
+      isSubmittingBatchRef.current = true;
       setIsSubmittingTask(true);
       const payloadItems = itemsToMigrate.map((f) => ({
         token: f.token,
@@ -1420,6 +1454,7 @@ export function DriveMigrationDashboard() {
     } catch (err: any) {
       showToast(`启动批量迁移失败: ${err.message}`, "error");
     } finally {
+      isSubmittingBatchRef.current = false;
       setIsSubmittingTask(false);
     }
   }
@@ -2049,6 +2084,7 @@ export function DriveMigrationDashboard() {
                           const isSelected = selectedTokens.has(file.token);
                           const state = getFileState(file.token);
                           const target = getItemTarget(file.token);
+                          const isRunning = runningTaskTokens.has(file.token);
 
                           const availableLevel2 = target.level1Token
                             ? hierarchy.level2Map.get(target.level1Token) || []
@@ -2062,14 +2098,18 @@ export function DriveMigrationDashboard() {
                               key={file.token}
                               className={`transition-colors hover:bg-secondary/40 ${
                                 isSelected ? "bg-secondary/20" : ""
-                              }`}
+                              } ${isRunning ? "bg-primary/5" : ""}`}
                             >
                               {/* 勾选复选框 */}
                               <td className="w-10 px-2 py-3.5 align-top text-center">
                                 <button
                                   type="button"
+                                  disabled={isRunning}
                                   onClick={() => toggleSelectOne(file.token)}
-                                  className="mt-1 inline-flex items-center justify-center text-muted-foreground hover:text-foreground cursor-pointer"
+                                  className={`mt-1 inline-flex items-center justify-center text-muted-foreground hover:text-foreground ${
+                                    isRunning ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
+                                  }`}
+                                  title={isRunning ? "该文档正在后台迁移中" : undefined}
                                 >
                                   {isSelected ? (
                                     <CheckSquare className="size-4 text-foreground" />
@@ -2179,7 +2219,12 @@ export function DriveMigrationDashboard() {
 
                               {/* 状态徽章 */}
                               <td className="px-2 py-3.5 align-top text-center">
-                                {state.status === "migrated" ? (
+                                {isRunning ? (
+                                  <Badge variant="outline" className="text-xs text-primary border-primary/30 gap-1 animate-pulse">
+                                    <Loader2 className="size-3 animate-spin" />
+                                    后台迁移中
+                                  </Badge>
+                                ) : state.status === "migrated" ? (
                                   <div className="space-y-1">
                                     <Badge variant="success" className="text-xs gap-1">
                                       <CheckCircle2 className="size-3" />
@@ -2224,7 +2269,18 @@ export function DriveMigrationDashboard() {
                               {/* 操作列 */}
                               <td className="px-3 py-3.5 align-top text-right">
                                 <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                                  {state.status === "pending" || state.status === "failed" ? (
+                                  {isRunning ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled
+                                      className="h-7 text-xs px-2 gap-1 text-primary opacity-80"
+                                      title="该文档正在后台迁移中"
+                                    >
+                                      <Loader2 className="size-3 animate-spin" />
+                                      <span>迁移中...</span>
+                                    </Button>
+                                  ) : state.status === "pending" || state.status === "failed" ? (
                                     <>
                                       <Button
                                         size="sm"

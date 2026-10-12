@@ -35,17 +35,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "未包含需要迁移的文档项" }, { status: 400 });
     }
 
-    const task = createDriveMigrationTask({
+    const { task, isNew } = createDriveMigrationTask({
       name,
       targetWikiUrl: targetWikiUrl.trim(),
       targetParentNodeToken: targetParentNodeToken ? targetParentNodeToken.trim() : undefined,
       items,
     });
 
-    // 后台异步触发迁移，不阻塞接口响应
-    void startBackgroundMigrationTask(task.id);
+    // 只有新创建的任务才后台异步触发迁移，防止重复执行
+    if (isNew) {
+      void startBackgroundMigrationTask(task.id);
+    }
 
-    return NextResponse.json({ task });
+    return NextResponse.json({ task, isNew });
   } catch (error: any) {
     console.error("创建网盘迁移任务失败:", error);
     return NextResponse.json(

@@ -74,8 +74,32 @@ export function createDriveMigrationTask(input: {
   targetWikiUrl: string;
   targetParentNodeToken?: string;
   items: MigrateItemParam[];
-}): DriveMigrationTask {
+}): { task: DriveMigrationTask; isNew: boolean } {
   const store = loadStore();
+  const currentTokens = new Set(input.items.map((i) => i.token));
+
+  // 1. 检查是否存在正在运行或排队中且包含相同文档集合的任务（防止连击/并发重复创建）
+  const activeTask = store.tasks.find((t) => {
+    if (t.status !== "running" && t.status !== "pending") return false;
+    const taskTokens = new Set(t.items.map((i) => i.token));
+
+    // 如果任务文档集完全相同
+    if (taskTokens.size === currentTokens.size && [...currentTokens].every((tk) => taskTokens.has(tk))) {
+      return true;
+    }
+
+    // 如果是单文档迁移，且该文档已经在活跃任务中
+    if (input.items.length === 1 && taskTokens.has(input.items[0].token)) {
+      return true;
+    }
+
+    return false;
+  });
+
+  if (activeTask) {
+    return { task: activeTask, isNew: false };
+  }
+
   const id = `dmt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
   const currentTime = now();
 
@@ -114,7 +138,7 @@ export function createDriveMigrationTask(input: {
     store.tasks = store.tasks.slice(0, 50);
   }
   persist(store);
-  return task;
+  return { task, isNew: true };
 }
 
 export function updateDriveMigrationTask(

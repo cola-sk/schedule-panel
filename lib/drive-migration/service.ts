@@ -113,6 +113,42 @@ export async function scanDriveFolder(input: {
 }
 
 /**
+ * 快速解析知识库 spaceId 与根信息（仅轻量调用单节点查询，无需全量递归扫描整个知识库）
+ */
+export async function resolveWikiSpaceInfo(targetWikiUrl: string): Promise<{
+  spaceId: string;
+  rootToken: string;
+  origin: string;
+}> {
+  const parsed = parseDocumentTarget(targetWikiUrl);
+  if (!parsed.wikiToken) {
+    throw new Error("请填写有效的飞书知识库 URL 或 wikiToken");
+  }
+
+  let origin = "https://open.feishu.cn";
+  try {
+    origin = new URL(targetWikiUrl.startsWith("http") ? targetWikiUrl : `https://${targetWikiUrl}`).origin;
+  } catch {
+    // ignore
+  }
+
+  const client = getFeishuClient();
+  const rootResult = await client.wiki.space.getNode({
+    params: { token: parsed.wikiToken, obj_type: "wiki" },
+  });
+
+  if (rootResult.code !== 0 || !rootResult.data?.node?.space_id) {
+    throw new Error(formatLarkError(rootResult, "读取飞书知识库根节点失败"));
+  }
+
+  return {
+    spaceId: rootResult.data.node.space_id,
+    rootToken: parsed.wikiToken,
+    origin,
+  };
+}
+
+/**
  * 获取知识库的目录节点树（包含所有层级）
  */
 export async function fetchWikiDirectories(targetWikiUrl: string): Promise<{
@@ -433,7 +469,7 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
   const client = getFeishuClient();
   let wikiInfo;
   try {
-    wikiInfo = await fetchWikiDirectories(task.targetWikiUrl);
+    wikiInfo = await resolveWikiSpaceInfo(task.targetWikiUrl);
   } catch (err: any) {
     updateDriveMigrationTask(taskId, {
       status: "failed",
