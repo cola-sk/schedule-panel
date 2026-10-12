@@ -2,8 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "前端机器人管理台",
-  description: "飞书轮值提醒与定时任务管理",
+  title: "Orbit",
+  description: "自动化调度与效能管理平台",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

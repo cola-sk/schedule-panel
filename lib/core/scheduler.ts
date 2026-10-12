@@ -373,8 +373,9 @@ export async function dueTasks(now = new Date(), maxCatchupHours = 1): Promise<R
  */
 export async function sendTaskReminder(
   task: ReminderTask,
+  scheduleOverride?: ReminderSchedule,
 ): Promise<TaskSendResult> {
-  const schedule = getSchedule(task.scheduleId);
+  const schedule = scheduleOverride || getSchedule(task.scheduleId);
   if (!schedule) throw new Error(`未找到定时规则: ${task.scheduleId}`);
 
   const bot = getBot(schedule.botId);

@@ -5,8 +5,16 @@ import { ReminderTask } from "@/lib/core/types";
 
 export async function POST(request: NextRequest) {
   try {
+    let body: any = {};
+    try {
+      body = await request.json();
+    } catch {
+      // 允许空 body
+    }
+
     const schedules = getSchedules();
-    const schedule = schedules.find(
+    const scheduleId = body.scheduleId;
+    const schedule = (scheduleId ? schedules.find((s) => s.id === scheduleId) : undefined) || schedules.find(
       (s) => s.id === "weekly-report-schedule" || s.type === "weekly_report" || s.botId === "weekly-report"
     );
 
@@ -14,20 +22,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "未找到周报归档任务配置" }, { status: 404 });
     }
 
-    const bot = getBot(schedule.botId);
+    const effectiveSchedule = {
+      ...schedule,
+      ...(body.name !== undefined ? { name: String(body.name).trim() } : {}),
+      ...(body.sourceDocumentId !== undefined ? { sourceDocumentId: String(body.sourceDocumentId).trim() } : {}),
+      ...(body.targetFolderId !== undefined ? { targetFolderId: String(body.targetFolderId).trim() } : {}),
+      ...(body.botId !== undefined ? { botId: String(body.botId).trim() } : {}),
+      ...(body.atAll !== undefined ? { atAll: Boolean(body.atAll) } : {}),
+    };
+
+    const bot = effectiveSchedule.botId ? getBot(effectiveSchedule.botId) : undefined;
     const nowIso = new Date().toISOString();
 
     const dummyTask: ReminderTask = {
       id: `manual-weekly-report-${Date.now()}`,
-      scheduleId: schedule.id,
-      scheduleName: schedule.name,
+      scheduleId: effectiveSchedule.id,
+      scheduleName: effectiveSchedule.name,
       host: { name: "系统自动" },
       scheduledAt: nowIso,
       status: "pending",
     };
 
     const result = await executeWeeklyReportTask({
-      schedule,
+      schedule: effectiveSchedule,
       task: dummyTask,
       bot,
       scheduledAt: nowIso,
@@ -43,7 +60,7 @@ export async function POST(request: NextRequest) {
       content: result.content,
     });
 
-    updateSchedule(schedule.id, {
+    updateSchedule(effectiveSchedule.id, {
       lastSentAt: nowIso,
     });
 

@@ -268,6 +268,7 @@ function buildFullDriveTree(
 function DriveTreeNodeRow({
   node,
   searchKeyword,
+  treeFilter,
   selectedId,
   onSelect,
   level = 0,
@@ -275,6 +276,7 @@ function DriveTreeNodeRow({
 }: {
   node: DriveTreeNode;
   searchKeyword: string;
+  treeFilter: "all" | "pending" | "skipped" | "migrated";
   selectedId: string;
   onSelect: (id: string) => void;
   level?: number;
@@ -325,14 +327,35 @@ function DriveTreeNodeRow({
     return check(node);
   }, [node, searchKeyword]);
 
-  // 搜索关键字存在时，自动展开含有匹配后代项的节点
+  // 状态筛选判断（自身匹配或任一下级子节点匹配）
+  const hasMatchingFilter = useMemo(() => {
+    if (treeFilter === "all") return true;
+    if (node.isFolder) {
+      if (!node.counts || node.counts.total === 0) return false;
+      if (treeFilter === "pending") return node.counts.pending > 0;
+      if (treeFilter === "skipped") return node.counts.skipped > 0;
+      if (treeFilter === "migrated") return node.counts.migrated > 0;
+      return true;
+    } else {
+      const st = itemStates[node.id]?.status || "pending";
+      return st === treeFilter;
+    }
+  }, [node, treeFilter, itemStates]);
+
+  // 搜索关键字存在或处于特定状态筛选时，自动展开含有匹配后代项的节点
   useEffect(() => {
     if (searchKeyword.trim() && hasMatchingDescendant && hasChildren) {
       setExpanded(true);
+    } else if (treeFilter !== "all" && hasMatchingFilter && hasChildren) {
+      setExpanded(true);
     }
-  }, [searchKeyword, hasMatchingDescendant, hasChildren]);
+  }, [searchKeyword, hasMatchingDescendant, treeFilter, hasMatchingFilter, hasChildren]);
 
   if (searchKeyword.trim() && !hasMatchingDescendant) {
+    return null;
+  }
+
+  if (treeFilter !== "all" && !hasMatchingFilter) {
     return null;
   }
 
@@ -460,6 +483,7 @@ function DriveTreeNodeRow({
               key={child.id}
               node={child}
               searchKeyword={searchKeyword}
+              treeFilter={treeFilter}
               selectedId={selectedId}
               onSelect={onSelect}
               level={level + 1}
@@ -499,6 +523,7 @@ export function DriveMigrationDashboard() {
   // 左侧选中的网盘节点 ID（'all' 代表全部文档，目录则展示目录下所有文档，单文件则右侧只展示单文件）
   const [selectedId, setSelectedId] = useState<string>("all");
   const [treeSearch, setTreeSearch] = useState<string>("");
+  const [treeFilter, setTreeFilter] = useState<"all" | "pending" | "skipped" | "migrated">("all");
 
   // 是否已完成从 localStorage 恢复初始化（防止初始化时空状态覆写缓存）
   const [isLoaded, setIsLoaded] = useState(false);
@@ -760,6 +785,7 @@ export function DriveMigrationDashboard() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [isTasksSheetOpen, setIsTasksSheetOpen] = useState(false);
   const prevCompletedTasksRef = useRef<Set<string>>(new Set());
+  const isFirstFetchRef = useRef<boolean>(true);
 
   // 获取后台任务清单并同步完成状态至页面
   const fetchTasks = useCallback(async () => {
@@ -827,25 +853,34 @@ export function DriveMigrationDashboard() {
         }
       }
 
-      // 检测新完成的任务并给出 Toast 提示
-      newTasks.forEach((task) => {
-        if (
-          task.status === "completed" &&
-          !prevCompletedTasksRef.current.has(task.id)
-        ) {
-          prevCompletedTasksRef.current.add(task.id);
-          if (task.progress.failed > 0) {
-            showToast(
-              `后台任务「${task.name}」已完成：成功 ${task.progress.success} 篇，失败 ${task.progress.failed} 篇`,
-              "error",
-            );
-          } else {
-            showToast(
-              `后台任务「${task.name}」全部成功！共 ${task.progress.success} 篇文档已归档。`,
-            );
+      // 检测新完成的任务并给出 Toast 提示（首次加载时静默登记历史任务，仅后续轮询中新完成的任务才弹 Toast）
+      if (isFirstFetchRef.current) {
+        newTasks.forEach((task) => {
+          if (task.status === "completed" || task.status === "failed") {
+            prevCompletedTasksRef.current.add(task.id);
           }
-        }
-      });
+        });
+        isFirstFetchRef.current = false;
+      } else {
+        newTasks.forEach((task) => {
+          if (
+            task.status === "completed" &&
+            !prevCompletedTasksRef.current.has(task.id)
+          ) {
+            prevCompletedTasksRef.current.add(task.id);
+            if (task.progress.failed > 0) {
+              showToast(
+                `后台任务「${task.name}」已完成：成功 ${task.progress.success} 篇，失败 ${task.progress.failed} 篇`,
+                "error",
+              );
+            } else {
+              showToast(
+                `后台任务「${task.name}」全部成功！共 ${task.progress.success} 篇文档已归档。`,
+              );
+            }
+          }
+        });
+      }
     } catch (e) {
       console.warn("获取后台迁移任务失败:", e);
     } finally {
@@ -1069,6 +1104,38 @@ export function DriveMigrationDashboard() {
       return true;
     });
   }, [scanResult, selectedId, driveTree, statusTab, typeFilter, searchQuery, getFileState]);
+
+  // 检查左侧目录树在当前搜索词和状态筛选下是否有任一可见节点（避免过滤后空白无提示）
+  const hasAnyVisibleTreeNode = useMemo(() => {
+    if (driveTree.rootChildren.length === 0) return false;
+    if (treeFilter === "all" && !treeSearch.trim()) return true;
+
+    function checkNode(n: DriveTreeNode): boolean {
+      if (treeSearch.trim()) {
+        const lower = treeSearch.toLowerCase();
+        const matchSearch =
+          n.name.toLowerCase().includes(lower) ||
+          n.path.toLowerCase().includes(lower) ||
+          n.children.some(checkNode);
+        if (!matchSearch) return false;
+      }
+
+      if (treeFilter !== "all") {
+        if (n.isFolder) {
+          if (!n.counts || n.counts.total === 0) return false;
+          if (treeFilter === "pending" && n.counts.pending === 0) return false;
+          if (treeFilter === "skipped" && n.counts.skipped === 0) return false;
+          if (treeFilter === "migrated" && n.counts.migrated === 0) return false;
+        } else {
+          const st = itemStates[n.id]?.status || "pending";
+          if (st !== treeFilter) return false;
+        }
+      }
+      return true;
+    }
+
+    return driveTree.rootChildren.some(checkNode);
+  }, [driveTree.rootChildren, treeFilter, treeSearch, itemStates]);
 
   // 当前表格行全选 / 取消全选
   const isAllSelected = useMemo(() => {
@@ -1484,16 +1551,11 @@ export function DriveMigrationDashboard() {
 
       {/* 顶部标题区 */}
       <div className="mb-8 flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <span className="grid size-9 place-items-center rounded-lg bg-foreground text-background">
-            <FolderSync className="size-5" />
-          </span>
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">个人网盘迁移</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              左侧目录树展示网盘所有文件与目录，支持按目录或单文档自由查看、忽略与迁移
-            </p>
-          </div>
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">个人网盘迁移</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            左侧目录树展示网盘所有文件与目录，支持按目录或单文档自由查看、忽略与迁移
+          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -1663,10 +1725,10 @@ export function DriveMigrationDashboard() {
 
       {/* 扫描结果：左侧网盘完整目录树 + 右侧文档清单双栏结构 */}
       {scanResult && (
-        <div className="grid gap-6 lg:grid-cols-12 items-start">
+        <div className="grid gap-6 lg:grid-cols-12 items-start min-h-[600px]">
           {/* 左侧：网盘目录树导航（包含所有目录与文件，对齐知识库归档） */}
           <aside className="lg:col-span-4 xl:col-span-3 space-y-4">
-            <Card className="shadow-none sticky top-6">
+            <Card className="shadow-none sticky top-6 min-h-[580px] flex flex-col">
               <CardHeader className="border-b border-border py-3">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm font-semibold flex items-center gap-2">
@@ -1687,8 +1749,43 @@ export function DriveMigrationDashboard() {
                     onChange={(e) => setTreeSearch(e.target.value)}
                   />
                 </div>
+
+                {/* 目录树状态筛选 Tabs */}
+                <div className="mt-2.5 grid grid-cols-4 gap-1 rounded-lg bg-secondary/50 p-1 text-xs">
+                  {(
+                    [
+                      { id: "all", label: "全部", count: globalStatusCounts.all },
+                      { id: "pending", label: "待迁移", count: globalStatusCounts.pending },
+                      { id: "skipped", label: "已忽略", count: globalStatusCounts.skipped },
+                      { id: "migrated", label: "已迁移", count: globalStatusCounts.migrated },
+                    ] as const
+                  ).map((tab) => {
+                    const active = treeFilter === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => {
+                          setTreeFilter(tab.id);
+                          setStatusTab(tab.id);
+                        }}
+                        className={`flex flex-col items-center justify-center rounded-md py-1 px-1 transition-all ${
+                          active
+                            ? "bg-card text-foreground shadow-xs font-semibold"
+                            : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+                        }`}
+                        title={`仅在目录树中展示${tab.label}状态的文件夹与文档`}
+                      >
+                        <span className="text-[11px] font-medium leading-none">{tab.label}</span>
+                        <span className="mt-1 font-mono text-[10px] opacity-70 leading-none">
+                          {tab.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </CardHeader>
-              <CardContent className="p-2 max-h-[calc(100vh-280px)] overflow-y-auto">
+              <CardContent className="p-2 flex-1 min-h-[440px] max-h-[calc(100vh-320px)] overflow-y-auto">
                 {/* 「全部文档」顶层节点 */}
                 <div
                   onClick={() => setSelectedId("all")}
@@ -1700,10 +1797,26 @@ export function DriveMigrationDashboard() {
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <FolderOpen className="size-4 text-primary shrink-0" />
-                    <span className="truncate">全部文档 ({driveTree.totalFiles})</span>
+                    <span className="truncate">
+                      {treeFilter === "all"
+                        ? `全部文档 (${driveTree.totalFiles})`
+                        : treeFilter === "pending"
+                        ? `全部待迁移 (${globalStatusCounts.pending})`
+                        : treeFilter === "skipped"
+                        ? `全部已忽略 (${globalStatusCounts.skipped})`
+                        : `全部已迁移 (${globalStatusCounts.migrated})`}
+                    </span>
                   </div>
                   <span className="font-mono text-[10px] text-muted-foreground shrink-0">
-                    {globalStatusCounts.migrated}/{globalStatusCounts.all}
+                    {treeFilter === "all"
+                      ? `${globalStatusCounts.migrated}/${globalStatusCounts.all}`
+                      : `${
+                          treeFilter === "pending"
+                            ? globalStatusCounts.pending
+                            : treeFilter === "skipped"
+                            ? globalStatusCounts.skipped
+                            : globalStatusCounts.migrated
+                        } 篇`}
                   </span>
                 </div>
 
@@ -1711,8 +1824,25 @@ export function DriveMigrationDashboard() {
 
                 {/* 递归树节点列表（展示所有目录与文件） */}
                 {driveTree.rootChildren.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-muted-foreground">
+                  <div className="py-16 text-center text-xs text-muted-foreground">
                     <p>网盘中暂无文档</p>
+                  </div>
+                ) : !hasAnyVisibleTreeNode ? (
+                  <div className="flex flex-col items-center justify-center py-16 px-2 text-center text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground">暂无匹配的目录或文档</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      当前筛选下没有可展示的内容
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTreeFilter("all");
+                        setStatusTab("all");
+                      }}
+                      className="mt-3 text-[11px] text-primary hover:underline cursor-pointer"
+                    >
+                      查看全部文档
+                    </button>
                   </div>
                 ) : (
                   <div className="space-y-0.5">
@@ -1721,6 +1851,7 @@ export function DriveMigrationDashboard() {
                         key={node.id}
                         node={node}
                         searchKeyword={treeSearch}
+                        treeFilter={treeFilter}
                         selectedId={selectedId}
                         onSelect={(id) => setSelectedId(id)}
                         itemStates={itemStates}
@@ -1734,7 +1865,7 @@ export function DriveMigrationDashboard() {
 
           {/* 右侧：文档清单与迁移管理 */}
           <section className="lg:col-span-8 xl:col-span-9 space-y-4 min-w-0">
-            <Card className="shadow-none">
+            <Card className="shadow-none min-h-[580px] flex flex-col">
               <CardHeader className="flex-col gap-4 pb-3 border-b border-border">
                 {/* 顶部范围与操作栏 */}
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2043,8 +2174,8 @@ export function DriveMigrationDashboard() {
                 </div>
               )}
 
-              <CardContent className="p-0">
-                <div className="overflow-x-auto w-full">
+              <CardContent className="p-0 flex-1 flex flex-col">
+                <div className="overflow-x-auto w-full flex-1 min-h-[440px]">
                   {/* 使用 table-fixed 强制分配各列宽度，确保级联选择等所有列默认均在视口中可见 */}
                   <table className="w-full table-fixed text-left text-sm min-w-[760px]">
                     <thead className="border-b border-border bg-secondary/50 font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -2071,7 +2202,7 @@ export function DriveMigrationDashboard() {
                     <tbody className="divide-y divide-border">
                       {filteredFiles.length === 0 ? (
                         <tr>
-                          <td colSpan={5} className="py-12 text-center text-sm text-muted-foreground">
+                          <td colSpan={5} className="py-24 text-center text-sm text-muted-foreground">
                             {selectedId === "all"
                               ? "当前分类下暂无匹配文档"
                               : selectedTreeNode?.isFolder

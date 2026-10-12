@@ -113,7 +113,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let atAllOverride: boolean | undefined;
     try {
       const body = await request.json();
-      targetOverride = body?.botId || body?.webhookUrl;
+      targetOverride = body?.webhookUrl?.trim() || body?.botId;
       sendModeOverride = body?.sendMode;
       cycleTypeOverride = body?.cycleType;
       if (body?.atAll !== undefined) atAllOverride = Boolean(body.atAll);

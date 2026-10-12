@@ -349,11 +349,14 @@ export async function sendTaskStatsNotification(
   if (!task) throw new Error("任务不存在");
 
   let targetWebhook = webhookUrlOverride?.trim();
+  let resolvedBotId: string | undefined;
   if (targetWebhook && !targetWebhook.startsWith("http")) {
+    resolvedBotId = targetWebhook;
     const bot = getBot(targetWebhook);
     targetWebhook = bot?.webhookUrl;
   }
   if (!targetWebhook && task.notifyConfig?.botId) {
+    resolvedBotId = task.notifyConfig.botId;
     const bot = getBot(task.notifyConfig.botId);
     targetWebhook = bot?.webhookUrl;
   }
@@ -489,7 +492,7 @@ export async function sendTaskStatsNotification(
       sentAt: sendTime,
       status: "sent",
       triggerType,
-      botId: task.notifyConfig?.botId,
+      botId: resolvedBotId || task.notifyConfig?.botId,
       content: pushDetail,
     });
   } catch {

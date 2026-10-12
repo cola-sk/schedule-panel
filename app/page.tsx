@@ -167,6 +167,7 @@ export default function DashboardPage() {
   const [toast, setToast] = useState<ToastState>();
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const toastIntervalRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const scheduleFormRef = useRef<HTMLFormElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -275,12 +276,45 @@ export default function DashboardPage() {
 
   const [testExecuting, setTestExecuting] = useState(false);
 
-  async function handleTestExecuteSchedule(schedule: ReminderSchedule) {
+  function getScheduleFormData(formEl?: HTMLFormElement | null): Partial<ReminderSchedule> {
+    if (!formEl) return {};
+    const form = new FormData(formEl);
+    const payload: Partial<ReminderSchedule> = {
+      dayOfWeek: Number(form.get("dayOfWeek")),
+      time: String(form.get("time") ?? ""),
+      botId: String(form.get("botId") ?? ""),
+      enabled: form.get("enabled") === "on",
+      atAll: form.get("atAll") === "on",
+    };
+    const name = form.get("name");
+    if (name !== null) payload.name = String(name).trim();
+    const documentId = form.get("documentId");
+    if (documentId !== null) payload.documentId = String(documentId).trim();
+    const sourceDocumentId = form.get("sourceDocumentId");
+    if (sourceDocumentId !== null) payload.sourceDocumentId = String(sourceDocumentId).trim();
+    const targetFolderId = form.get("targetFolderId");
+    if (targetFolderId !== null) payload.targetFolderId = String(targetFolderId).trim();
+    return payload;
+  }
+
+  async function handleTestExecuteSchedule(schedule: ReminderSchedule, overrides?: Partial<ReminderSchedule>) {
     if (testExecuting) return;
     setTestExecuting(true);
     try {
-      if (schedule.type === "weekly_report" || schedule.id.includes("weekly-report")) {
-        const res = await fetch("/api/weekly-report/execute", { method: "POST" });
+      const mergedSchedule = overrides ? { ...schedule, ...overrides } : schedule;
+      if (mergedSchedule.type === "weekly_report" || mergedSchedule.id.includes("weekly-report")) {
+        const res = await fetch("/api/weekly-report/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scheduleId: mergedSchedule.id,
+            name: mergedSchedule.name,
+            sourceDocumentId: mergedSchedule.sourceDocumentId,
+            targetFolderId: mergedSchedule.targetFolderId,
+            botId: mergedSchedule.botId,
+            atAll: mergedSchedule.atAll,
+          }),
+        });
         const data = await res.json();
         if (res.ok) {
           showToast("本周周报已成功测试执行并归档！");
@@ -289,7 +323,18 @@ export default function DashboardPage() {
           showToast(data.error ?? "测试执行失败", "error");
         }
       } else {
-        const res = await fetch(`/api/schedules/${encodeURIComponent(schedule.id)}/test-execute`, { method: "POST" });
+        const res = await fetch(`/api/schedules/${encodeURIComponent(mergedSchedule.id)}/test-execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: mergedSchedule.name,
+            documentId: mergedSchedule.documentId,
+            sourceDocumentId: mergedSchedule.sourceDocumentId,
+            targetFolderId: mergedSchedule.targetFolderId,
+            botId: mergedSchedule.botId,
+            atAll: mergedSchedule.atAll,
+          }),
+        });
         const data = await res.json();
         if (res.ok) {
           showToast(data.message || "已成功测试发送提醒（不影响主持人轮替）！");
@@ -884,7 +929,7 @@ export default function DashboardPage() {
                   </Button>
                 </Dialog.Close>
               </div>
-              <form className="p-6" onSubmit={saveSchedule}>
+              <form ref={scheduleFormRef} className="p-6" onSubmit={saveSchedule}>
                 {editingSchedule.type === "weekly_report" || editingSchedule.id.includes("weekly-report") ? (
                   /* 周报自动归档配置表单 */
                   <div className="grid max-w-xl grid-cols-1 gap-4 sm:grid-cols-2 text-sm">
@@ -1079,7 +1124,10 @@ export default function DashboardPage() {
                     variant="outline"
                     size="sm"
                     type="button"
-                    onClick={() => void handleTestExecuteSchedule(editingSchedule)}
+                    onClick={() => {
+                      const formValues = getScheduleFormData(scheduleFormRef.current);
+                      void handleTestExecuteSchedule(editingSchedule, formValues);
+                    }}
                     disabled={testExecuting || saving}
                     className="text-xs text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-900/60 hover:bg-blue-50 dark:hover:bg-blue-950/40"
                     title="立即执行一次（仅测试推送或生成，不影响主持人轮替）"

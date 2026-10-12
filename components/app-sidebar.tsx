@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, CalendarClock, FolderSync, ListTodo, Settings2 } from "lucide-react";
+import { BookOpen, CalendarClock, FolderSync, ListTodo, Orbit, Settings2 } from "lucide-react";
 
 const links = [
   { href: "/", label: "定时任务", icon: CalendarClock },
@@ -18,11 +18,11 @@ export function AppSidebar() {
   return (
     <aside className="fixed inset-y-0 z-40 flex w-60 flex-col border-r border-border bg-card px-3 py-6 select-none">
       <div>
-        <Link href="/" className="mb-8 flex items-center gap-2.5 px-3 text-sm font-semibold tracking-tight">
-          <span className="grid size-7 place-items-center rounded-md bg-foreground text-xs font-mono font-medium text-background">
-            F
+        <Link href="/" className="group mb-8 flex items-center gap-2.5 px-3 text-sm font-semibold tracking-tight">
+          <span className="grid size-7 place-items-center rounded-lg bg-foreground text-background shadow-xs transition-transform group-hover:scale-105">
+            <Orbit className="size-4" />
           </span>
-          <span>前端机器人</span>
+          <span className="font-semibold tracking-tight text-foreground">Orbit</span>
         </Link>
         <nav className="space-y-1 text-sm font-medium">
           {links.map(({ href, label, icon: Icon }) => {
