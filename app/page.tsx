@@ -62,6 +62,8 @@ type KnowledgeTaskSummary = {
     sendMode?: string;
     cycleType?: string;
     lastSentAt?: string;
+    silentDailyScanEnabled?: boolean;
+    lastSilentScannedAt?: string;
   };
 };
 

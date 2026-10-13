@@ -31,10 +31,17 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
       sendMode: "both",
       cycleType: "this_week",
       atAll: false,
+      silentDailyScanEnabled: true,
+    };
+
+    const currentConfig: TaskNotifyConfig = {
+      ...defaultConfig,
+      ...(task.notifyConfig || {}),
+      silentDailyScanEnabled: task.notifyConfig?.silentDailyScanEnabled !== false,
     };
 
     return NextResponse.json({
-      notifyConfig: task.notifyConfig || defaultConfig,
+      notifyConfig: currentConfig,
       availableBots,
       taskName: task.name,
     });
@@ -69,6 +76,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       sendMode: "both",
       cycleType: "this_week",
       atAll: false,
+      silentDailyScanEnabled: true,
     };
 
     const frequency = body.frequency === "daily" || body.frequency === "weekly"
@@ -88,6 +96,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           : prevConfig.cycleType === "yesterday" ? "this_week" : prevConfig.cycleType || "this_week",
       sendMode: body.sendMode || prevConfig.sendMode || "both",
       atAll: body.atAll !== undefined ? Boolean(body.atAll) : Boolean(prevConfig.atAll),
+      silentDailyScanEnabled: body.silentDailyScanEnabled !== undefined
+        ? Boolean(body.silentDailyScanEnabled)
+        : prevConfig.silentDailyScanEnabled !== false,
+      lastSilentScannedAt: prevConfig.lastSilentScannedAt,
       lastSentAt: prevConfig.lastSentAt,
     };
 

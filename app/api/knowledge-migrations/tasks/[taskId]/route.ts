@@ -71,17 +71,17 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         targetDirectories: directories,
         taxonomy,
         overview: getTaskOverview(task.id),
-        notifySchedule: task.notifyConfig
-          ? {
-              enabled: task.notifyConfig.enabled,
-              frequency: task.notifyConfig.frequency || "weekly",
-              dayOfWeek: task.notifyConfig.dayOfWeek,
-              time: task.notifyConfig.time,
-              lastSentAt: task.notifyConfig.lastSentAt,
-              cycleType: task.notifyConfig.cycleType,
-              nextRunAt: getNextMigrationStatsRunAt(task.notifyConfig),
-            }
-          : undefined,
+        notifySchedule: {
+          enabled: Boolean(task.notifyConfig?.enabled),
+          frequency: task.notifyConfig?.frequency || "weekly",
+          dayOfWeek: task.notifyConfig?.dayOfWeek ?? 5,
+          time: task.notifyConfig?.time || "18:00",
+          lastSentAt: task.notifyConfig?.lastSentAt,
+          cycleType: task.notifyConfig?.cycleType,
+          nextRunAt: task.notifyConfig ? getNextMigrationStatsRunAt(task.notifyConfig) : undefined,
+          silentDailyScanEnabled: task.notifyConfig?.silentDailyScanEnabled !== false,
+          lastSilentScannedAt: task.notifyConfig?.lastSilentScannedAt,
+        },
         createdAt: task.createdAt,
         updatedAt: task.updatedAt,
       },

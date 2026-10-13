@@ -71,7 +71,10 @@ type TaskDetailResponse = {
       counts: Record<MigrationStatus, number>;
       jobs: Array<{ id: string; status: string; total: number; processed: number; failed: number; startedAt: string }>;
     };
-    notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "frequency" | "dayOfWeek" | "time" | "lastSentAt" | "cycleType"> & { nextRunAt?: string };
+    notifySchedule?: Pick<
+      TaskNotifyConfig,
+      "enabled" | "frequency" | "dayOfWeek" | "time" | "lastSentAt" | "cycleType" | "silentDailyScanEnabled" | "lastSilentScannedAt"
+    > & { nextRunAt?: string };
   };
   currentNodeItem?: KnowledgeMigrationItem;
   items: KnowledgeMigrationItem[];

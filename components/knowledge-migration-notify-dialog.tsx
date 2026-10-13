@@ -12,6 +12,7 @@ import {
   ExternalLink,
   HelpCircle,
   Loader2,
+  Moon,
   Play,
   Send,
   SlidersHorizontal,
@@ -108,6 +109,7 @@ export function KnowledgeMigrationNotifyDialog({
     time: "18:00",
     cycleType: "this_week",
     atAll: false,
+    silentDailyScanEnabled: true,
   });
 
   // 打开弹窗时拉取最新配置及系统可用机器人
@@ -132,6 +134,7 @@ export function KnowledgeMigrationNotifyDialog({
             ...loadedConfig,
             cycleType: loadedConfig.cycleType || "this_week",
             atAll: Boolean(loadedConfig.atAll),
+            silentDailyScanEnabled: loadedConfig.silentDailyScanEnabled !== false,
           });
           // 若原本配了自定义 webhookUrl 但没有对应 botId，自动展开高级设置
           if (loadedConfig.webhookUrl && !loadedConfig.botId) {
@@ -244,11 +247,46 @@ export function KnowledgeMigrationNotifyDialog({
             </div>
           ) : (
             <div className="mt-4 space-y-4 text-sm">
-              {/* 启用开关 */}
+              {/* 每日 23:55 静默巡检扫描开关 */}
+              <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/40 dark:border-indigo-900/50 dark:bg-indigo-950/20 p-3.5 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <div className="font-medium text-foreground flex items-center gap-1.5">
+                      <Moon className="size-4 text-indigo-500" />
+                      <span>每日 23:55 静默巡检扫描</span>
+                      {config.silentDailyScanEnabled !== false ? (
+                        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
+                          已开启 (每晚 23:55)
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-muted text-muted-foreground text-[10px]">
+                          已停用
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      每天 23:55 自动扫描知识库，将当天新移入的文档锁定入库时间并更新周度贡献榜。
+                    </p>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={config.silentDailyScanEnabled !== false}
+                    onChange={(e) => setConfig({ ...config, silentDailyScanEnabled: e.target.checked })}
+                    className="size-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                </div>
+                <div className="flex items-center justify-between pt-1 border-t border-indigo-100/60 dark:border-indigo-900/30 text-[11px] text-muted-foreground">
+                  <span>✨ 全程静默执行，不发送任何群通知消息</span>
+                  <span>{config.lastSilentScannedAt ? `上次执行: ${formatTime(config.lastSilentScannedAt)}` : "今日待执行"}</span>
+                </div>
+              </div>
+
+              {/* 飞书群定时消息推送开关 */}
               <div className="flex items-center justify-between rounded-xl border border-border/80 bg-muted/30 p-3.5">
                 <div className="space-y-0.5">
                   <div className="font-medium text-foreground flex items-center gap-1.5">
-                    <span>启用定时自动推送</span>
+                    <Bell className="size-3.5 text-indigo-500" />
+                    <span>飞书群定时消息推送</span>
                     {config.enabled && (
                       <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
                         已启用
@@ -256,7 +294,7 @@ export function KnowledgeMigrationNotifyDialog({
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    系统将在设定的时间自动分析文档并推送统计卡片到飞书群
+                    系统将在设定的时间自动分析文档并将统计卡片推送到飞书群
                   </p>
                 </div>
                 <input

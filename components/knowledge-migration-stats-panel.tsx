@@ -15,6 +15,7 @@ import {
   FolderOpen,
   Layers,
   Loader2,
+  Moon,
   RefreshCw,
   Search,
   Settings2,
@@ -56,7 +57,10 @@ interface KnowledgeMigrationStatsPanelProps {
   stats?: TaskMigrationStats | null;
   onRefresh: () => Promise<unknown> | void;
   loading?: boolean;
-  notifySchedule?: Pick<TaskNotifyConfig, "enabled" | "frequency" | "dayOfWeek" | "time" | "lastSentAt" | "cycleType"> & { nextRunAt?: string };
+  notifySchedule?: Pick<
+    TaskNotifyConfig,
+    "enabled" | "frequency" | "dayOfWeek" | "time" | "lastSentAt" | "cycleType" | "silentDailyScanEnabled" | "lastSilentScannedAt"
+  > & { nextRunAt?: string };
   onNotifyConfigSaved?: () => Promise<unknown> | void;
 }
 
@@ -259,6 +263,19 @@ export function KnowledgeMigrationStatsPanel({
                   上次分析：{formatDate(stats.updatedAt)}
                 </span>
               )}
+              <button
+                type="button"
+                onClick={() => setNotifyDialogOpen(true)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors cursor-pointer ${
+                  notifySchedule?.silentDailyScanEnabled !== false
+                    ? "bg-indigo-50/80 border-indigo-200 text-indigo-700 hover:bg-indigo-100/80 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300"
+                    : "bg-muted/40 border-border text-muted-foreground hover:bg-muted/80"
+                }`}
+                title="点击配置每日 23:55 静默巡检扫描"
+              >
+                <Moon className="size-3.5" />
+                <span>每日23:55静默巡检: {notifySchedule?.silentDailyScanEnabled !== false ? "已开启" : "已停用"}</span>
+              </button>
               <Button
                 size="sm"
                 variant="outline"
@@ -287,7 +304,7 @@ export function KnowledgeMigrationStatsPanel({
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-100">
                 <span className="inline-flex items-center gap-1.5 font-semibold">
                   <span className="size-2 rounded-full bg-emerald-500 animate-pulse" />
-                  定时任务已启动
+                  群定时推送已启动
                 </span>
                 <span>{notifySchedule.frequency === "daily" ? "每天" : `每${WEEKDAY_LABELS[notifySchedule.dayOfWeek] || "周"}`} {notifySchedule.time}（北京时间）执行</span>
                 <span className="rounded bg-emerald-100 dark:bg-emerald-900/60 px-1.5 py-0.5 text-[11px] font-medium text-emerald-800 dark:text-emerald-200">
@@ -298,6 +315,30 @@ export function KnowledgeMigrationStatsPanel({
                   下次执行：{formatDate(notifySchedule.nextRunAt)}
                 </span>
                 {notifySchedule.lastSentAt && <span>上次成功推送：{formatDate(notifySchedule.lastSentAt)}</span>}
+                {notifySchedule.silentDailyScanEnabled !== false && (
+                  <span className="inline-flex items-center gap-1 text-indigo-700 dark:text-indigo-300 ml-auto font-medium">
+                    <Moon className="size-3" />
+                    每晚 23:55 静默巡检
+                  </span>
+                )}
+              </div>
+            )}
+
+            {!notifySchedule?.enabled && notifySchedule?.silentDailyScanEnabled !== false && (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-indigo-100 bg-indigo-50/50 px-3 py-1.5 text-xs text-indigo-900 dark:border-indigo-900/40 dark:bg-indigo-950/20 dark:text-indigo-200">
+                <div className="flex items-center gap-2">
+                  <Moon className="size-3.5 text-indigo-500" />
+                  <span>
+                    <strong>每日 23:55 静默巡检已开启</strong>：系统每晚自动全量巡检知识库并锁定入库时间，不向任何群发送通知。
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setNotifyDialogOpen(true)}
+                  className="text-xs text-indigo-600 hover:underline dark:text-indigo-400 font-medium"
+                >
+                  配置规则
+                </button>
               </div>
             )}
           </div>

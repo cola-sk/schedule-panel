@@ -561,3 +561,77 @@ export async function dispatchDueMigrationStats(): Promise<Array<{ taskId: strin
 
   return results;
 }
+
+/**
+ * 定时轮询检查并派发所有到期的每日 23:55 静默巡检扫描（供全局 Cron 调用）
+ * 仅执行飞书知识库全量节点扫描、锁定入库账本与更新周榜数据，绝不向飞书群发送任何通知。
+ */
+export async function dispatchDueMigrationSilentScan(
+  now = new Date()
+): Promise<Array<{ taskId: string; status: "scanned" | "failed"; error?: string; totalDocs?: number }>> {
+  const results: Array<{ taskId: string; status: "scanned" | "failed"; error?: string; totalDocs?: number }> = [];
+  const tasks = getTasks();
+
+  for (const task of tasks) {
+    // 默认开启：未明确配置为 false 即视为启用
+    const isSilentEnabled = task.notifyConfig?.silentDailyScanEnabled !== false;
+    if (!isSilentEnabled) {
+      continue;
+    }
+
+    // 检查目标知识库配置是否有效
+    if (!task.config?.targetWikiRoot) {
+      continue;
+    }
+
+    // 目标执行时间：北京时间每天 23:55
+    const scheduledTime = atShanghaiLocal(now, "23:55");
+
+    // 检查今天是否已经执行过
+    if (task.notifyConfig?.lastSilentScannedAt) {
+      const lastRan = new Date(task.notifyConfig.lastSilentScannedAt);
+      if (!Number.isNaN(lastRan.getTime())) {
+        if (
+          chinaDateKey(lastRan) === chinaDateKey(scheduledTime) &&
+          lastRan.getTime() >= scheduledTime.getTime()
+        ) {
+          continue;
+        }
+      }
+    }
+
+    // 检查是否进入 23:55 到达后的 1 小时派发窗口
+    const diffMs = now.getTime() - scheduledTime.getTime();
+    if (diffMs < 0 || diffMs > 3600_000) {
+      continue;
+    }
+
+    // 到期触发静默扫描
+    try {
+      const stats = await generateMigrationWeeklyStats(task.id);
+      const updatedConfig: TaskNotifyConfig = {
+        ...(task.notifyConfig || {
+          enabled: false,
+          dayOfWeek: 5,
+          time: "18:00",
+        }),
+        silentDailyScanEnabled: true,
+        lastSilentScannedAt: now.toISOString(),
+      };
+      saveTaskNotifyConfig(task.id, updatedConfig);
+      addTaskAuditLog(task.id, {
+        action: "scan_completed" as any,
+        detail: `[定时静默巡检] 每日 23:55 自动扫描完成：共扫描 ${stats.totalFeishuDocs} 篇（非 Wiki ${stats.totalNonWikiDocs} 篇），已同步最新入库账本与周度榜单（不发送任何群通知）`,
+      });
+      persistMigrationState();
+      results.push({ taskId: task.id, status: "scanned", totalDocs: stats.totalFeishuDocs });
+      console.log(`[定时静默扫描] 任务 ${task.name}(${task.id}) 每日 23:55 静默扫描完成，全量文档 ${stats.totalFeishuDocs} 篇`);
+    } catch (err: any) {
+      console.error(`[定时静默扫描] 任务 ${task.name}(${task.id}) 执行失败:`, err);
+      results.push({ taskId: task.id, status: "failed", error: err?.message || "扫描失败" });
+    }
+  }
+
+  return results;
+}
+
