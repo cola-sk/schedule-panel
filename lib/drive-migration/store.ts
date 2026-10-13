@@ -122,6 +122,10 @@ export function createDriveMigrationTask(input: {
     customTargetParentToken: item.customTargetParentToken,
     status: item.type === "folder" ? "skipped" : "pending",
     error: item.type === "folder" ? "文件夹暂不直接迁移" : undefined,
+    isShortcut: item.isShortcut,
+    targetToken: item.targetToken,
+    shortcutToken: item.shortcutToken,
+    targetType: item.targetType,
   }));
 
   const initialSkipped = taskItems.filter((i) => i.status === "skipped").length;

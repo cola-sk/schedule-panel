@@ -12,10 +12,13 @@ import {
 } from "./types";
 import {
   getDriveMigrationTask,
+  getDriveMigrationTasks,
+  getDriveMigrationStats,
   updateDriveMigrationTask,
   updateDriveMigrationTaskItem,
   recordDriveMigrationStats,
 } from "./store";
+import type { MigratedFileRecord } from "./types";
 
 /**
  * 解析网盘文件夹 URL 或 Token
@@ -82,19 +85,31 @@ export async function scanDriveFolder(input: {
 
       const files = res.data?.files ?? [];
       for (const file of files) {
-        const fileType = (file.type as DriveFileType) || "unknown";
+        const isShortcut = file.type === "shortcut";
+        const shortcutInfo = (file as any).shortcut_info;
+        const targetToken = shortcutInfo?.target_token;
+        const targetType = shortcutInfo?.target_type;
+        // 如果是快捷方式，将其实际类型映射为对应云文档类型（如 docx / sheet / file 等）
+        const resolvedType = isShortcut
+          ? (targetType as DriveFileType) || "file"
+          : ((file.type as DriveFileType) || "unknown");
+
         const item: DriveFileItem = {
           token: file.token,
           name: file.name || "未命名文件",
-          type: fileType,
+          type: resolvedType,
           parentToken: folderToken,
           parentPath: currentPath || "/",
           url: file.url,
           modifiedTime: file.modified_time,
           size: (file as any).size ? Number((file as any).size) : undefined,
+          isShortcut,
+          shortcutToken: isShortcut ? file.token : undefined,
+          targetToken: targetToken || file.token,
+          targetType: targetType || file.type,
         };
 
-        if (fileType === "folder") {
+        if (resolvedType === "folder") {
           resultFiles.push(item);
           if (recursive) {
             const nextPath = `${currentPath}/${file.name}`.replace(/\/+/g, "/");
@@ -234,6 +249,7 @@ export async function fetchWikiDirectories(targetWikiUrl: string): Promise<{
           nodeToken: item.node_token,
           title: itemTitle,
           objType: item.obj_type,
+          objToken: item.obj_token,
           parentNodeToken: parentToken,
           path: itemPath,
           depth: depth + 1,
@@ -278,6 +294,7 @@ export async function fetchWikiDirectories(targetWikiUrl: string): Promise<{
           nodeToken: item.node_token,
           title: itemTitle,
           objType: item.obj_type,
+          objToken: item.obj_token,
           parentNodeToken: parsed.wikiToken,
           path: itemPath,
           depth: 1,
@@ -317,6 +334,209 @@ export async function performScan(input: {
     fetchWikiDirectories(input.targetWikiUrl),
   ]);
 
+  // 1. 读取历史持久化迁移统计与任务记录
+  const statsData = getDriveMigrationStats();
+  const tasksData = getDriveMigrationTasks();
+
+  const knownMigratedMap = new Map<string, MigratedFileRecord>();
+  for (const r of statsData.records) {
+    if (r.status === "success") {
+      knownMigratedMap.set(r.fileToken, r);
+    }
+  }
+  for (const t of tasksData) {
+    for (const item of t.items) {
+      if (item.status === "success" && !knownMigratedMap.has(item.token)) {
+        knownMigratedMap.set(item.token, {
+          fileToken: item.token,
+          fileName: item.name,
+          fileType: item.type,
+          targetWikiUrl: t.targetWikiUrl,
+          wikiToken: item.wikiToken,
+          wikiUrl: item.url,
+          migratedAt: t.updatedAt || t.createdAt,
+          status: "success",
+          taskId: t.id,
+        });
+      }
+      if (item.targetToken && item.status === "success" && !knownMigratedMap.has(item.targetToken)) {
+        knownMigratedMap.set(item.targetToken, {
+          fileToken: item.targetToken,
+          fileName: item.name,
+          fileType: item.type,
+          targetWikiUrl: t.targetWikiUrl,
+          wikiToken: item.wikiToken,
+          wikiUrl: item.url,
+          migratedAt: t.updatedAt || t.createdAt,
+          status: "success",
+          taskId: t.id,
+        });
+      }
+    }
+  }
+
+  // 2. 映射目标知识库所有已存在的文档节点（objToken -> wikiNode）
+  const wikiObjMap = new Map<string, WikiDirectoryNode>();
+  for (const d of wikiInfo.directories) {
+    if (d.objToken) {
+      wikiObjMap.set(d.objToken, d);
+    }
+  }
+
+  // 3. 关联并判定每个文档的迁移状态
+  const newlyDiscoveredMigrated: MigratedFileRecord[] = [];
+  const client = getFeishuClient();
+  const checkLimit = pLimit(5);
+  const shortcutCheckPromises: Promise<void>[] = [];
+
+  for (const f of files) {
+    if (f.type === "folder") continue;
+
+    // A. 历史迁移记录匹配（真实 token、当前 token 或快捷方式 token）
+    const match =
+      (f.targetToken ? knownMigratedMap.get(f.targetToken) : undefined) ||
+      knownMigratedMap.get(f.token) ||
+      (f.shortcutToken ? knownMigratedMap.get(f.shortcutToken) : undefined);
+
+    if (match) {
+      f.status = "migrated";
+      f.wikiToken = match.wikiToken;
+      f.wikiUrl = match.wikiUrl || (match.wikiToken ? `${wikiInfo.origin}/wiki/${match.wikiToken}` : undefined);
+
+      // 若历史记录中缺少 wikiToken，尝试从当前知识库目录或接口探测补全
+      if (!f.wikiToken) {
+        const wikiMatch =
+          (f.targetToken ? wikiObjMap.get(f.targetToken) : undefined) ||
+          wikiObjMap.get(f.token);
+        if (wikiMatch) {
+          f.wikiToken = wikiMatch.nodeToken;
+          f.wikiUrl = `${wikiInfo.origin}/wiki/${wikiMatch.nodeToken}`;
+        } else if (f.targetToken) {
+          shortcutCheckPromises.push(
+            checkLimit(async () => {
+              try {
+                const nodeRes = await client.wiki.space.getNode({
+                  params: {
+                    token: f.targetToken!,
+                    obj_type: (f.targetType as any) || "wiki",
+                  },
+                });
+                if (nodeRes.code === 0 && nodeRes.data?.node) {
+                  const node = nodeRes.data.node;
+                  const nodeToken = node.node_token || (node as any).wiki_token;
+                  if (nodeToken) {
+                    f.wikiToken = nodeToken;
+                    f.wikiUrl = `${wikiInfo.origin}/wiki/${nodeToken}`;
+                    newlyDiscoveredMigrated.push({
+                      fileToken: f.targetToken || f.token,
+                      fileName: f.name,
+                      fileType: f.type,
+                      sourceDriveToken: parsedFolder.folderToken,
+                      targetWikiUrl: input.targetWikiUrl,
+                      wikiToken: nodeToken,
+                      wikiUrl: f.wikiUrl,
+                      migratedAt: new Date().toISOString(),
+                      status: "success",
+                    });
+                  }
+                }
+              } catch {}
+            }),
+          );
+        }
+      }
+      continue;
+    }
+
+    // B. 目标知识库树节点匹配
+    const wikiMatch =
+      (f.targetToken ? wikiObjMap.get(f.targetToken) : undefined) ||
+      wikiObjMap.get(f.token);
+
+    if (wikiMatch) {
+      f.status = "migrated";
+      f.wikiToken = wikiMatch.nodeToken;
+      f.wikiUrl = `${wikiInfo.origin}/wiki/${wikiMatch.nodeToken}`;
+      newlyDiscoveredMigrated.push({
+        fileToken: f.targetToken || f.token,
+        fileName: f.name,
+        fileType: f.type,
+        sourceDriveToken: parsedFolder.folderToken,
+        targetWikiUrl: input.targetWikiUrl,
+        wikiToken: wikiMatch.nodeToken,
+        wikiUrl: f.wikiUrl,
+        migratedAt: new Date().toISOString(),
+        status: "success",
+      });
+      continue;
+    }
+
+    // C. 针对快捷方式，主动探测目标是否已被移入知识库
+    if (f.isShortcut && f.targetToken) {
+      shortcutCheckPromises.push(
+        checkLimit(async () => {
+          try {
+            const nodeRes = await client.wiki.space.getNode({
+              params: {
+                token: f.targetToken!,
+                obj_type: (f.targetType as any) || "wiki",
+              },
+            });
+            if (nodeRes.code === 0 && nodeRes.data?.node) {
+              const node = nodeRes.data.node;
+              const nodeToken = node.node_token || (node as any).wiki_token;
+              if (nodeToken) {
+                f.status = "migrated";
+                f.wikiToken = nodeToken;
+                f.wikiUrl = `${wikiInfo.origin}/wiki/${nodeToken}`;
+                newlyDiscoveredMigrated.push({
+                  fileToken: f.targetToken || f.token,
+                  fileName: f.name,
+                  fileType: f.type,
+                  sourceDriveToken: parsedFolder.folderToken,
+                  targetWikiUrl: input.targetWikiUrl,
+                  wikiToken: nodeToken,
+                  wikiUrl: f.wikiUrl,
+                  migratedAt: new Date().toISOString(),
+                  status: "success",
+                });
+              }
+            }
+          } catch {
+            // 静默跳过探测异常
+          }
+        }),
+      );
+    }
+  }
+
+  if (shortcutCheckPromises.length > 0) {
+    await Promise.all(shortcutCheckPromises);
+  }
+
+  if (newlyDiscoveredMigrated.length > 0) {
+    recordDriveMigrationStats(newlyDiscoveredMigrated);
+  }
+
+  // 4. 生成统一的状态映射字典供前端即时恢复
+  const knownItemStates: Record<
+    string,
+    { status: "pending" | "migrating" | "migrated" | "skipped" | "failed"; wikiToken?: string; url?: string }
+  > = {};
+
+  for (const f of files) {
+    if (f.status && f.status !== "pending") {
+      const stateObj = {
+        status: f.status,
+        wikiToken: f.wikiToken,
+        url: f.wikiUrl,
+      };
+      knownItemStates[f.token] = stateObj;
+      if (f.targetToken) knownItemStates[f.targetToken] = stateObj;
+      if (f.shortcutToken) knownItemStates[f.shortcutToken] = stateObj;
+    }
+  }
+
   const typeCounts: Record<string, number> = {};
   let totalFiles = 0;
   let totalFolders = 0;
@@ -346,6 +566,7 @@ export async function performScan(input: {
       totalFolders,
       typeCounts,
     },
+    knownItemStates,
   };
 }
 
@@ -360,6 +581,60 @@ function normalizeObjType(type: string): "doc" | "sheet" | "bitable" | "mindnote
   if (type === "slides") return "slides";
   if (type === "mindnote") return "mindnote";
   return "file";
+}
+
+/**
+ * 解析并轮询 moveDocsToWiki 的结果，获取 wiki_token
+ */
+async function resolveMovedWikiToken(
+  client: any,
+  res: any,
+  realToken: string,
+  realType: string,
+): Promise<string | undefined> {
+  if (res.data?.wiki_token) {
+    return res.data.wiki_token;
+  }
+
+  // 如果返回了异步 task_id，轮询任务结果（最多 15 秒）
+  if (res.data?.task_id) {
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        const taskRes = await client.wiki.task.get({
+          path: { task_id: res.data.task_id },
+          params: { task_type: "move" },
+        });
+        if (taskRes.code === 0 && taskRes.data?.task) {
+          const taskObj = taskRes.data.task;
+          const nodeToken =
+            taskObj.move_result?.[0]?.node?.node_token ||
+            taskObj.move_result?.[0]?.node?.wiki_token ||
+            (taskObj as any).node_token;
+          if (nodeToken) return nodeToken;
+        }
+      } catch {
+        // ignore error during polling
+      }
+    }
+  }
+
+  // 降级探测：通过 getNode 查找该文档是否已成功挂载入知识库
+  try {
+    const nodeRes = await client.wiki.space.getNode({
+      params: {
+        token: realToken,
+        obj_type: realType,
+      },
+    });
+    if (nodeRes.code === 0 && nodeRes.data?.node) {
+      return nodeRes.data.node.node_token || nodeRes.data.node.wiki_token;
+    }
+  } catch {
+    // ignore
+  }
+
+  return undefined;
 }
 
 /**
@@ -384,7 +659,9 @@ export async function executeBatchMigration(input: {
     input.items.map((item) =>
       limit(async (): Promise<MigrateSingleResult> => {
         const parentToken = item.customTargetParentToken || defaultParentToken;
-        const objType = normalizeObjType(item.type);
+        const realToken = item.targetToken || item.token;
+        const realType = item.targetType || item.type;
+        const objType = normalizeObjType(realType);
 
         if (item.type === "folder") {
           return {
@@ -402,7 +679,7 @@ export async function executeBatchMigration(input: {
             data: {
               parent_wiki_token: parentToken,
               obj_type: objType,
-              obj_token: item.token,
+              obj_token: realToken,
               apply: true,
             },
           });
@@ -417,7 +694,7 @@ export async function executeBatchMigration(input: {
             };
           }
 
-          const wikiToken = res.data?.wiki_token;
+          const wikiToken = await resolveMovedWikiToken(client, res, realToken, objType);
           const url = wikiToken ? `${wikiInfo.origin}/wiki/${wikiToken}` : undefined;
 
           return {
@@ -451,10 +728,13 @@ export async function executeBatchMigration(input: {
     else skipped++;
   }
 
-  // 记录迁移统计数据
-  recordDriveMigrationStats(
-    results.map((r) => ({
-      fileToken: r.token,
+  // 记录迁移统计数据（同时记录 item.token 和 realToken）
+  const statsToRecord: MigratedFileRecord[] = [];
+  results.forEach((r, idx) => {
+    const origItem = input.items[idx];
+    const realToken = origItem?.targetToken || r.token;
+    statsToRecord.push({
+      fileToken: realToken,
       fileName: r.name,
       fileType: r.type,
       sourceDriveToken: input.sourceFolderToken || "default_personal_drive",
@@ -467,8 +747,27 @@ export async function executeBatchMigration(input: {
       migratedAt: new Date().toISOString(),
       status: r.status,
       error: r.error,
-    })),
-  );
+    });
+    if (realToken !== r.token) {
+      statsToRecord.push({
+        fileToken: r.token,
+        fileName: r.name,
+        fileType: r.type,
+        sourceDriveToken: input.sourceFolderToken || "default_personal_drive",
+        sourceDriveUrl: input.sourceFolderUrl,
+        sourceDriveName: input.sourceFolderName || "个人网盘",
+        targetWikiUrl: input.targetWikiUrl,
+        targetParentNodeToken: input.targetParentNodeToken,
+        wikiToken: r.wikiToken,
+        wikiUrl: r.url,
+        migratedAt: new Date().toISOString(),
+        status: r.status,
+        error: r.error,
+      });
+    }
+  });
+
+  recordDriveMigrationStats(statsToRecord);
 
   return {
     results,
@@ -511,7 +810,9 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
     pendingItems.map((item) =>
       limit(async () => {
         const parentToken = item.customTargetParentToken || defaultParentToken;
-        const objType = normalizeObjType(item.type);
+        const realToken = item.targetToken || item.token;
+        const realType = item.targetType || item.type;
+        const objType = normalizeObjType(realType);
 
         updateDriveMigrationTaskItem(taskId, item.token, { status: "migrating" });
         updateDriveMigrationTask(taskId, { currentFile: item.name });
@@ -556,7 +857,7 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
             data: {
               parent_wiki_token: parentToken,
               obj_type: objType,
-              obj_token: item.token,
+              obj_token: realToken,
               apply: true,
             },
           });
@@ -569,7 +870,7 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
             });
             recordDriveMigrationStats([
               {
-                fileToken: item.token,
+                fileToken: realToken,
                 fileName: item.name,
                 fileType: item.type,
                 sourceDriveToken: task.sourceFolderToken || "default_personal_drive",
@@ -596,7 +897,7 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
             return;
           }
 
-          const wikiToken = res.data?.wiki_token;
+          const wikiToken = await resolveMovedWikiToken(client, res, realToken, objType);
           const url = wikiToken ? `${origin}/wiki/${wikiToken}` : undefined;
 
           updateDriveMigrationTaskItem(taskId, item.token, {
@@ -604,9 +905,10 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
             wikiToken,
             url,
           });
-          recordDriveMigrationStats([
+
+          const statRecords: MigratedFileRecord[] = [
             {
-              fileToken: item.token,
+              fileToken: realToken,
               fileName: item.name,
               fileType: item.type,
               sourceDriveToken: task.sourceFolderToken || "default_personal_drive",
@@ -620,7 +922,26 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
               status: "success",
               taskId: task.id,
             },
-          ]);
+          ];
+          if (item.token !== realToken) {
+            statRecords.push({
+              fileToken: item.token,
+              fileName: item.name,
+              fileType: item.type,
+              sourceDriveToken: task.sourceFolderToken || "default_personal_drive",
+              sourceDriveUrl: task.sourceFolderUrl,
+              sourceDriveName: task.sourceFolderName || "个人网盘",
+              targetWikiUrl: task.targetWikiUrl,
+              targetParentNodeToken: parentToken,
+              wikiToken,
+              wikiUrl: url,
+              migratedAt: new Date().toISOString(),
+              status: "success",
+              taskId: task.id,
+            });
+          }
+          recordDriveMigrationStats(statRecords);
+
           const current = getDriveMigrationTask(taskId);
           if (current) {
             updateDriveMigrationTask(taskId, {
@@ -639,7 +960,7 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
           });
           recordDriveMigrationStats([
             {
-              fileToken: item.token,
+              fileToken: realToken,
               fileName: item.name,
               fileType: item.type,
               sourceDriveToken: task.sourceFolderToken || "default_personal_drive",

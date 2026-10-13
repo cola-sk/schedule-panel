@@ -7,6 +7,7 @@ export type DriveFileType =
   | "file"
   | "slides"
   | "mindnote"
+  | "shortcut"
   | "unknown";
 
 export interface DriveFileItem {
@@ -18,12 +19,20 @@ export interface DriveFileItem {
   url?: string;
   modifiedTime?: string;
   size?: number;
+  isShortcut?: boolean;
+  shortcutToken?: string;
+  targetToken?: string;
+  targetType?: string;
+  status?: "pending" | "migrating" | "migrated" | "skipped" | "failed";
+  wikiToken?: string;
+  wikiUrl?: string;
 }
 
 export interface WikiDirectoryNode {
   nodeToken: string;
   title: string;
   objType?: string;
+  objToken?: string;
   parentNodeToken?: string;
   path: string;
   depth: number;
@@ -47,6 +56,15 @@ export interface ScanDriveResult {
     totalFolders: number;
     typeCounts: Record<string, number>;
   };
+  knownItemStates?: Record<
+    string,
+    {
+      status: "pending" | "migrating" | "migrated" | "skipped" | "failed";
+      wikiToken?: string;
+      url?: string;
+      error?: string;
+    }
+  >;
 }
 
 export interface MigrateItemParam {
@@ -54,6 +72,10 @@ export interface MigrateItemParam {
   name: string;
   type: string;
   customTargetParentToken?: string;
+  isShortcut?: boolean;
+  targetToken?: string;
+  shortcutToken?: string;
+  targetType?: string;
 }
 
 export interface MigrateSingleResult {
@@ -87,6 +109,10 @@ export interface MigrationTaskItemDetail {
   wikiToken?: string;
   url?: string;
   error?: string;
+  isShortcut?: boolean;
+  targetToken?: string;
+  shortcutToken?: string;
+  targetType?: string;
 }
 
 export interface DriveMigrationTask {

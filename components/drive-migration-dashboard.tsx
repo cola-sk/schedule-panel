@@ -741,12 +741,39 @@ export function DriveMigrationDashboard() {
     [itemTargets],
   );
 
-  // 获取某个文件的当前状态（默认 pending）
+  // 建立全局文件字典（支持按 token、targetToken、shortcutToken 快速索引）
+  const fileMap = useMemo(() => {
+    const map = new Map<string, DriveFileItem>();
+    if (!scanResult?.files) return map;
+    scanResult.files.forEach((f) => {
+      map.set(f.token, f);
+      if (f.targetToken) map.set(f.targetToken, f);
+      if (f.shortcutToken) map.set(f.shortcutToken, f);
+    });
+    return map;
+  }, [scanResult]);
+
+  // 获取某个文件的当前状态（默认 pending，支持快捷方式穿透到真实文件或自带已知状态）
   const getFileState = useCallback(
     (token: string): ItemStateDetail => {
-      return itemStates[token] || { status: "pending" };
+      if (itemStates[token]) return itemStates[token];
+      const file = fileMap.get(token);
+      if (file?.targetToken && itemStates[file.targetToken]) {
+        return itemStates[file.targetToken];
+      }
+      if (file?.shortcutToken && itemStates[file.shortcutToken]) {
+        return itemStates[file.shortcutToken];
+      }
+      if (file?.status && file.status !== "pending") {
+        return {
+          status: file.status,
+          wikiToken: file.wikiToken,
+          url: file.wikiUrl,
+        };
+      }
+      return { status: "pending" };
     },
-    [itemStates],
+    [itemStates, fileMap],
   );
 
   // 当前左侧选中的树节点详情（可能为目录，也可能为单个文件，为 null 时代表全部文档）
@@ -806,20 +833,46 @@ export function DriveMigrationDashboard() {
       newTasks.forEach((task) => {
         task.items.forEach((item) => {
           if (item.status === "success") {
-            newlyFinishedItems[item.token] = {
+            const detail: ItemStateDetail = {
               status: "migrated",
               wikiToken: item.wikiToken,
               url: item.url,
             };
+            newlyFinishedItems[item.token] = detail;
+            if (item.targetToken) newlyFinishedItems[item.targetToken] = detail;
+            if (item.shortcutToken) newlyFinishedItems[item.shortcutToken] = detail;
             tokensToRemoveFromSelected.add(item.token);
+            if (item.targetToken) tokensToRemoveFromSelected.add(item.targetToken);
           } else if (item.status === "failed") {
-            newlyFinishedItems[item.token] = {
+            const failDetail: ItemStateDetail = {
               status: "failed",
               error: item.error,
             };
+            newlyFinishedItems[item.token] = failDetail;
+            if (item.targetToken) newlyFinishedItems[item.targetToken] = failDetail;
           }
         });
       });
+
+      // 从后端持久化统计中同步可能已迁移的文档记录（防止清除任务后状态丢失）
+      try {
+        const statsRes = await fetch("/api/drive-migration/stats");
+        if (statsRes.ok) {
+          const statsJson = await statsRes.json();
+          if (Array.isArray(statsJson?.stats?.records)) {
+            statsJson.stats.records.forEach((rec: any) => {
+              if (rec.status === "success" && rec.fileToken) {
+                newlyFinishedItems[rec.fileToken] = {
+                  status: "migrated",
+                  wikiToken: rec.wikiToken,
+                  url: rec.wikiUrl,
+                };
+                tokensToRemoveFromSelected.add(rec.fileToken);
+              }
+            });
+          }
+        }
+      } catch {}
 
       if (Object.keys(newlyFinishedItems).length > 0) {
         updateItemStates((prev) => {
@@ -991,12 +1044,23 @@ export function DriveMigrationDashboard() {
 
       setScanResult(data);
 
+      if (data.knownItemStates && Object.keys(data.knownItemStates).length > 0) {
+        updateItemStates((prev) => ({
+          ...prev,
+          ...data.knownItemStates,
+        }));
+      }
+
       // 默认勾选非已迁移、非忽略的文档
       const initialSelected = new Set<string>();
       data.files.forEach((f: DriveFileItem) => {
         if (f.type !== "folder") {
-          const state = getFileState(f.token);
-          if (state.status !== "migrated" && state.status !== "skipped") {
+          const directKnown =
+            data.knownItemStates?.[f.token] ||
+            (f.targetToken ? data.knownItemStates?.[f.targetToken] : undefined) ||
+            (f.shortcutToken ? data.knownItemStates?.[f.shortcutToken] : undefined);
+          const state = directKnown || getFileState(f.token);
+          if (state.status !== "migrated" && state.status !== "skipped" && f.status !== "migrated") {
             initialSelected.add(f.token);
           }
         }
@@ -1221,35 +1285,46 @@ export function DriveMigrationDashboard() {
 
   // 单个文件的状态标记操作
   function handleMarkAsMigrated(token: string, name: string) {
+    const file = fileMap.get(token);
     updateItemStates((prev) => ({
       ...prev,
       [token]: { status: "migrated", manual: true },
+      ...(file?.targetToken ? { [file.targetToken]: { status: "migrated", manual: true } } : {}),
+      ...(file?.shortcutToken ? { [file.shortcutToken]: { status: "migrated", manual: true } } : {}),
     }));
     setSelectedTokens((prev) => {
       const next = new Set(prev);
       next.delete(token);
+      if (file?.targetToken) next.delete(file.targetToken);
       return next;
     });
     showToast(`已标记「${name}」为已迁移`);
   }
 
   function handleMarkAsSkipped(token: string, name: string) {
+    const file = fileMap.get(token);
     updateItemStates((prev) => ({
       ...prev,
       [token]: { status: "skipped" },
+      ...(file?.targetToken ? { [file.targetToken]: { status: "skipped" } } : {}),
+      ...(file?.shortcutToken ? { [file.shortcutToken]: { status: "skipped" } } : {}),
     }));
     setSelectedTokens((prev) => {
       const next = new Set(prev);
       next.delete(token);
+      if (file?.targetToken) next.delete(file.targetToken);
       return next;
     });
     showToast(`已忽略「${name}」`);
   }
 
   function handleResetToPending(token: string, name: string) {
+    const file = fileMap.get(token);
     updateItemStates((prev) => {
       const next = { ...prev };
       delete next[token];
+      if (file?.targetToken) delete next[file.targetToken];
+      if (file?.shortcutToken) delete next[file.shortcutToken];
       return next;
     });
     showToast(`已将「${name}」恢复为待迁移`);
@@ -1284,6 +1359,10 @@ export function DriveMigrationDashboard() {
               name: file.name,
               type: file.type,
               customTargetParentToken: targetParentToken,
+              isShortcut: file.isShortcut,
+              targetToken: file.targetToken,
+              shortcutToken: file.shortcutToken,
+              targetType: file.targetType,
             },
           ],
         }),
@@ -1346,6 +1425,10 @@ export function DriveMigrationDashboard() {
         name: f.name,
         type: f.type,
         customTargetParentToken: getResolvedTargetToken(f.token),
+        isShortcut: f.isShortcut,
+        targetToken: f.targetToken,
+        shortcutToken: f.shortcutToken,
+        targetType: f.targetType,
       }));
 
       const res = await fetch("/api/drive-migration/tasks", {
@@ -1504,6 +1587,10 @@ export function DriveMigrationDashboard() {
         name: f.name,
         type: f.type,
         customTargetParentToken: getResolvedTargetToken(f.token),
+        isShortcut: f.isShortcut,
+        targetToken: f.targetToken,
+        shortcutToken: f.shortcutToken,
+        targetType: f.targetType,
       }));
 
       const res = await fetch("/api/drive-migration/tasks", {
@@ -2244,12 +2331,12 @@ export function DriveMigrationDashboard() {
                               <td className="w-10 px-2 py-3.5 align-top text-center">
                                 <button
                                   type="button"
-                                  disabled={isRunning}
+                                  disabled={isRunning || state.status === "migrated"}
                                   onClick={() => toggleSelectOne(file.token)}
                                   className={`mt-1 inline-flex items-center justify-center text-muted-foreground hover:text-foreground ${
-                                    isRunning ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
+                                    isRunning || state.status === "migrated" ? "opacity-40 cursor-not-allowed" : "cursor-pointer"
                                   }`}
-                                  title={isRunning ? "该文档正在后台迁移中" : undefined}
+                                  title={isRunning ? "该文档正在后台迁移中" : state.status === "migrated" ? "该文档已完成迁移" : undefined}
                                 >
                                   {isSelected ? (
                                     <CheckSquare className="size-4 text-foreground" />
@@ -2286,6 +2373,11 @@ export function DriveMigrationDashboard() {
                                     <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 shrink-0">
                                       {getFileTypeLabel(file.type)}
                                     </Badge>
+                                    {file.isShortcut && (
+                                      <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4 shrink-0 bg-secondary/80 text-muted-foreground border border-border" title="源自飞书个人网盘快捷方式">
+                                        快捷方式
+                                      </Badge>
+                                    )}
                                     {file.parentPath && (
                                       <span className="font-mono text-[11px] truncate max-w-[200px]" title={file.parentPath}>
                                         原路径: {file.parentPath}
@@ -2370,10 +2462,10 @@ export function DriveMigrationDashboard() {
                                       <CheckCircle2 className="size-3" />
                                       {state.manual ? "已标记" : "已迁移"}
                                     </Badge>
-                                    {state.url && (
+                                    {(state.url || file.wikiUrl) && (
                                       <div>
                                         <a
-                                          href={state.url}
+                                          href={state.url || file.wikiUrl}
                                           target="_blank"
                                           rel="noreferrer"
                                           className="text-xs text-primary hover:underline inline-flex items-center gap-0.5"
