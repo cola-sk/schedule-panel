@@ -3,13 +3,18 @@ import "server-only";
 import fs from "fs";
 import path from "path";
 import type {
+  DriveFolderStat,
+  DriveMigrationStats,
   DriveMigrationTask,
   MigrateItemParam,
+  MigratedFileRecord,
   MigrationTaskItemDetail,
+  TargetWikiStat,
 } from "./types";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const STORE_FILE = path.join(DATA_DIR, "drive-migrations.json");
+const STATS_FILE = path.join(DATA_DIR, "drive-migration-stats.json");
 
 interface DriveMigrationStore {
   tasks: DriveMigrationTask[];
@@ -20,6 +25,10 @@ declare global {
   var __driveMigrationStore__: DriveMigrationStore | undefined;
   // eslint-disable-next-line no-var
   var __driveMigrationStoreMtime__: number | undefined;
+  // eslint-disable-next-line no-var
+  var __driveMigrationStats__: DriveMigrationStats | undefined;
+  // eslint-disable-next-line no-var
+  var __driveMigrationStatsMtime__: number | undefined;
 }
 
 function now() {
@@ -71,6 +80,9 @@ export function getDriveMigrationTask(id: string): DriveMigrationTask | undefine
 
 export function createDriveMigrationTask(input: {
   name?: string;
+  sourceFolderUrl?: string;
+  sourceFolderToken?: string;
+  sourceFolderName?: string;
   targetWikiUrl: string;
   targetParentNodeToken?: string;
   items: MigrateItemParam[];
@@ -117,6 +129,9 @@ export function createDriveMigrationTask(input: {
   const task: DriveMigrationTask = {
     id,
     name: input.name || `迁移任务 (${input.items.length} 篇文档)`,
+    sourceFolderUrl: input.sourceFolderUrl,
+    sourceFolderToken: input.sourceFolderToken,
+    sourceFolderName: input.sourceFolderName,
     targetWikiUrl: input.targetWikiUrl,
     targetParentNodeToken: input.targetParentNodeToken,
     status: "running",
@@ -176,3 +191,174 @@ export function clearCompletedDriveMigrationTasks(): void {
   store.tasks = store.tasks.filter((t) => t.status === "running" || t.status === "pending");
   persist(store);
 }
+
+function emptyStats(): DriveMigrationStats {
+  return {
+    totalFiles: 0,
+    successFiles: 0,
+    failedFiles: 0,
+    skippedFiles: 0,
+    totalDrivesCount: 0,
+    totalTargetWikisCount: 0,
+    drives: {},
+    targetWikis: {},
+    records: [],
+    updatedAt: now(),
+  };
+}
+
+function persistStats(stats: DriveMigrationStats): void {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const temporary = `${STATS_FILE}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify(stats, null, 2), "utf-8");
+    fs.renameSync(temporary, STATS_FILE);
+    global.__driveMigrationStats__ = stats;
+    global.__driveMigrationStatsMtime__ = fs.statSync(STATS_FILE).mtimeMs;
+  } catch (error) {
+    console.error("写入个人网盘迁移统计记录失败:", error);
+  }
+}
+
+function loadStatsStore(): DriveMigrationStats {
+  try {
+    if (!fs.existsSync(STATS_FILE)) {
+      const stats = emptyStats();
+      // 首次加载时自动从现有历史任务中补齐已完成的迁移数据
+      const currentTasks = loadStore().tasks;
+      const initialRecords: MigratedFileRecord[] = [];
+      for (const t of currentTasks) {
+        for (const item of t.items) {
+          if (item.status === "success" || item.status === "failed") {
+            initialRecords.push({
+              fileToken: item.token,
+              fileName: item.name,
+              fileType: item.type,
+              sourceDriveToken: t.sourceFolderToken || "default_personal_drive",
+              sourceDriveUrl: t.sourceFolderUrl,
+              sourceDriveName: t.sourceFolderName || "个人网盘",
+              targetWikiUrl: t.targetWikiUrl,
+              targetParentNodeToken: item.customTargetParentToken || t.targetParentNodeToken,
+              wikiToken: item.wikiToken,
+              wikiUrl: item.url,
+              migratedAt: t.updatedAt || t.createdAt,
+              status: item.status,
+              error: item.error,
+              taskId: t.id,
+            });
+          }
+        }
+      }
+      if (initialRecords.length > 0) {
+        return recordDriveMigrationStats(initialRecords);
+      }
+      return stats;
+    }
+    const mtime = fs.statSync(STATS_FILE).mtimeMs;
+    if (global.__driveMigrationStats__ && global.__driveMigrationStatsMtime__ === mtime) {
+      return global.__driveMigrationStats__;
+    }
+    const parsed = JSON.parse(fs.readFileSync(STATS_FILE, "utf-8")) as DriveMigrationStats;
+    global.__driveMigrationStats__ = parsed;
+    global.__driveMigrationStatsMtime__ = mtime;
+    return parsed;
+  } catch (error) {
+    console.error("读取个人网盘迁移统计记录失败:", error);
+    return emptyStats();
+  }
+}
+
+export function getDriveMigrationStats(): DriveMigrationStats {
+  return loadStatsStore();
+}
+
+export function recordDriveMigrationStats(newRecords: MigratedFileRecord[]): DriveMigrationStats {
+  const stats = fs.existsSync(STATS_FILE) ? loadStatsStore() : emptyStats();
+
+  for (const record of newRecords) {
+    const existingIndex = stats.records.findIndex(
+      (r) => r.fileToken === record.fileToken && r.taskId === record.taskId
+    );
+
+    if (existingIndex >= 0) {
+      stats.records[existingIndex] = { ...stats.records[existingIndex], ...record };
+    } else {
+      stats.records.unshift(record);
+    }
+  }
+
+  let totalFiles = 0;
+  let successFiles = 0;
+  let failedFiles = 0;
+  let skippedFiles = 0;
+
+  const drivesMap: Record<string, DriveFolderStat> = {};
+  const wikisMap: Record<string, TargetWikiStat> = {};
+
+  for (const r of stats.records) {
+    totalFiles++;
+    if (r.status === "success") successFiles++;
+    else if (r.status === "failed") failedFiles++;
+    else if (r.status === "skipped") skippedFiles++;
+
+    const driveKey = r.sourceDriveToken || "default_personal_drive";
+    if (!drivesMap[driveKey]) {
+      drivesMap[driveKey] = {
+        folderToken: driveKey,
+        folderUrl: r.sourceDriveUrl,
+        folderName: r.sourceDriveName || (driveKey === "default_personal_drive" ? "个人网盘" : `个人网盘 (${driveKey})`),
+        totalMigratedFiles: 0,
+        successCount: 0,
+        failedCount: 0,
+        lastMigratedAt: r.migratedAt,
+        fileTokens: [],
+      };
+    }
+    const dStat = drivesMap[driveKey];
+    dStat.totalMigratedFiles++;
+    if (r.status === "success") dStat.successCount++;
+    else if (r.status === "failed") dStat.failedCount++;
+    if (!dStat.fileTokens.includes(r.fileToken)) {
+      dStat.fileTokens.push(r.fileToken);
+    }
+    if (new Date(r.migratedAt) > new Date(dStat.lastMigratedAt)) {
+      dStat.lastMigratedAt = r.migratedAt;
+    }
+
+    const wikiKey = r.targetWikiUrl || "default_target_wiki";
+    if (!wikisMap[wikiKey]) {
+      wikisMap[wikiKey] = {
+        targetWikiUrl: wikiKey,
+        totalMigratedFiles: 0,
+        successCount: 0,
+        failedCount: 0,
+        lastMigratedAt: r.migratedAt,
+        fileTokens: [],
+      };
+    }
+    const wStat = wikisMap[wikiKey];
+    wStat.totalMigratedFiles++;
+    if (r.status === "success") wStat.successCount++;
+    else if (r.status === "failed") wStat.failedCount++;
+    if (!wStat.fileTokens.includes(r.fileToken)) {
+      wStat.fileTokens.push(r.fileToken);
+    }
+    if (new Date(r.migratedAt) > new Date(wStat.lastMigratedAt)) {
+      wStat.lastMigratedAt = r.migratedAt;
+    }
+  }
+
+  stats.totalFiles = totalFiles;
+  stats.successFiles = successFiles;
+  stats.failedFiles = failedFiles;
+  stats.skippedFiles = skippedFiles;
+  stats.drives = drivesMap;
+  stats.targetWikis = wikisMap;
+  stats.totalDrivesCount = Object.keys(drivesMap).length;
+  stats.totalTargetWikisCount = Object.keys(wikisMap).length;
+  stats.updatedAt = now();
+
+  persistStats(stats);
+  return stats;
+}
+

@@ -5,7 +5,14 @@ import { MigrateItemParam } from "@/lib/drive-migration/types";
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { targetWikiUrl, targetParentNodeToken, items } = body;
+    const {
+      sourceFolderUrl,
+      sourceFolderToken,
+      sourceFolderName,
+      targetWikiUrl,
+      targetParentNodeToken,
+      items,
+    } = body;
 
     if (!targetWikiUrl || typeof targetWikiUrl !== "string") {
       return NextResponse.json({ error: "目标知识库链接不能为空" }, { status: 400 });
@@ -23,6 +30,9 @@ export async function POST(request: Request) {
     }));
 
     const result = await executeBatchMigration({
+      sourceFolderUrl: typeof sourceFolderUrl === "string" ? sourceFolderUrl.trim() : undefined,
+      sourceFolderToken: typeof sourceFolderToken === "string" ? sourceFolderToken.trim() : undefined,
+      sourceFolderName: typeof sourceFolderName === "string" ? sourceFolderName.trim() : undefined,
       targetWikiUrl: targetWikiUrl.trim(),
       targetParentNodeToken: String(targetParentNodeToken || ""),
       items: migrationItems,

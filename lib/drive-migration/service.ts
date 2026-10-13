@@ -14,6 +14,7 @@ import {
   getDriveMigrationTask,
   updateDriveMigrationTask,
   updateDriveMigrationTaskItem,
+  recordDriveMigrationStats,
 } from "./store";
 
 /**
@@ -368,11 +369,13 @@ export async function executeBatchMigration(input: {
   targetWikiUrl: string;
   targetParentNodeToken: string;
   items: MigrateItemParam[];
+  sourceFolderUrl?: string;
+  sourceFolderToken?: string;
+  sourceFolderName?: string;
 }): Promise<BatchMigrateResponse> {
   const client = getFeishuClient();
   const wikiInfo = await fetchWikiDirectories(input.targetWikiUrl);
   const spaceId = wikiInfo.spaceId;
-  const origin = wikiInfo.origin;
 
   const defaultParentToken = input.targetParentNodeToken || wikiInfo.rootToken;
   const limit = pLimit(2); // 限制并发，避免触发飞书频控
@@ -415,7 +418,7 @@ export async function executeBatchMigration(input: {
           }
 
           const wikiToken = res.data?.wiki_token;
-          const url = wikiToken ? `${origin}/wiki/${wikiToken}` : undefined;
+          const url = wikiToken ? `${wikiInfo.origin}/wiki/${wikiToken}` : undefined;
 
           return {
             token: item.token,
@@ -447,6 +450,25 @@ export async function executeBatchMigration(input: {
     else if (r.status === "failed") failed++;
     else skipped++;
   }
+
+  // 记录迁移统计数据
+  recordDriveMigrationStats(
+    results.map((r) => ({
+      fileToken: r.token,
+      fileName: r.name,
+      fileType: r.type,
+      sourceDriveToken: input.sourceFolderToken || "default_personal_drive",
+      sourceDriveUrl: input.sourceFolderUrl,
+      sourceDriveName: input.sourceFolderName || "个人网盘",
+      targetWikiUrl: input.targetWikiUrl,
+      targetParentNodeToken: input.targetParentNodeToken,
+      wikiToken: r.wikiToken,
+      wikiUrl: r.url,
+      migratedAt: new Date().toISOString(),
+      status: r.status,
+      error: r.error,
+    })),
+  );
 
   return {
     results,
@@ -499,6 +521,22 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
             status: "skipped",
             error: "文件夹暂不直接迁移，请直接迁移文件夹内的具体文档",
           });
+          recordDriveMigrationStats([
+            {
+              fileToken: item.token,
+              fileName: item.name,
+              fileType: item.type,
+              sourceDriveToken: task.sourceFolderToken || "default_personal_drive",
+              sourceDriveUrl: task.sourceFolderUrl,
+              sourceDriveName: task.sourceFolderName || "个人网盘",
+              targetWikiUrl: task.targetWikiUrl,
+              targetParentNodeToken: parentToken,
+              migratedAt: new Date().toISOString(),
+              status: "skipped",
+              error: "文件夹暂不直接迁移，请直接迁移文件夹内的具体文档",
+              taskId: task.id,
+            },
+          ]);
           const current = getDriveMigrationTask(taskId);
           if (current) {
             updateDriveMigrationTask(taskId, {
@@ -529,6 +567,22 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
               status: "failed",
               error: errorMsg,
             });
+            recordDriveMigrationStats([
+              {
+                fileToken: item.token,
+                fileName: item.name,
+                fileType: item.type,
+                sourceDriveToken: task.sourceFolderToken || "default_personal_drive",
+                sourceDriveUrl: task.sourceFolderUrl,
+                sourceDriveName: task.sourceFolderName || "个人网盘",
+                targetWikiUrl: task.targetWikiUrl,
+                targetParentNodeToken: parentToken,
+                migratedAt: new Date().toISOString(),
+                status: "failed",
+                error: errorMsg,
+                taskId: task.id,
+              },
+            ]);
             const current = getDriveMigrationTask(taskId);
             if (current) {
               updateDriveMigrationTask(taskId, {
@@ -550,6 +604,23 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
             wikiToken,
             url,
           });
+          recordDriveMigrationStats([
+            {
+              fileToken: item.token,
+              fileName: item.name,
+              fileType: item.type,
+              sourceDriveToken: task.sourceFolderToken || "default_personal_drive",
+              sourceDriveUrl: task.sourceFolderUrl,
+              sourceDriveName: task.sourceFolderName || "个人网盘",
+              targetWikiUrl: task.targetWikiUrl,
+              targetParentNodeToken: parentToken,
+              wikiToken,
+              wikiUrl: url,
+              migratedAt: new Date().toISOString(),
+              status: "success",
+              taskId: task.id,
+            },
+          ]);
           const current = getDriveMigrationTask(taskId);
           if (current) {
             updateDriveMigrationTask(taskId, {
@@ -566,6 +637,22 @@ export async function startBackgroundMigrationTask(taskId: string): Promise<void
             status: "failed",
             error: errorMsg,
           });
+          recordDriveMigrationStats([
+            {
+              fileToken: item.token,
+              fileName: item.name,
+              fileType: item.type,
+              sourceDriveToken: task.sourceFolderToken || "default_personal_drive",
+              sourceDriveUrl: task.sourceFolderUrl,
+              sourceDriveName: task.sourceFolderName || "个人网盘",
+              targetWikiUrl: task.targetWikiUrl,
+              targetParentNodeToken: parentToken,
+              migratedAt: new Date().toISOString(),
+              status: "failed",
+              error: errorMsg,
+              taskId: task.id,
+            },
+          ]);
           const current = getDriveMigrationTask(taskId);
           if (current) {
             updateDriveMigrationTask(taskId, {

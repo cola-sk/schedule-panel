@@ -25,7 +25,15 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { name, targetWikiUrl, targetParentNodeToken, items } = body;
+    const {
+      name,
+      sourceFolderUrl,
+      sourceFolderToken,
+      sourceFolderName,
+      targetWikiUrl,
+      targetParentNodeToken,
+      items,
+    } = body;
 
     if (!targetWikiUrl || typeof targetWikiUrl !== "string") {
       return NextResponse.json({ error: "目标知识库链接无效" }, { status: 400 });
@@ -37,6 +45,9 @@ export async function POST(request: Request) {
 
     const { task, isNew } = createDriveMigrationTask({
       name,
+      sourceFolderUrl: typeof sourceFolderUrl === "string" ? sourceFolderUrl.trim() : undefined,
+      sourceFolderToken: typeof sourceFolderToken === "string" ? sourceFolderToken.trim() : undefined,
+      sourceFolderName: typeof sourceFolderName === "string" ? sourceFolderName.trim() : undefined,
       targetWikiUrl: targetWikiUrl.trim(),
       targetParentNodeToken: targetParentNodeToken ? targetParentNodeToken.trim() : undefined,
       items,

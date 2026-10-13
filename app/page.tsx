@@ -56,6 +56,7 @@ type KnowledgeTaskSummary = {
     enabled?: boolean;
     botId?: string;
     webhookUrl?: string;
+    frequency?: "daily" | "weekly";
     dayOfWeek?: number;
     time?: string;
     sendMode?: string;
@@ -752,9 +753,12 @@ export default function DashboardPage() {
                         const migrated = kt.overview?.counts?.migrated ?? 0;
                         const pending = kt.overview?.counts?.pending ?? 0;
 
-                        const cycleText = kt.notifyConfig?.dayOfWeek && kt.notifyConfig.time
-                          ? `${weekdays[kt.notifyConfig.dayOfWeek]} ${kt.notifyConfig.time}`
-                          : "定时推送";
+                        const isDaily = kt.notifyConfig?.frequency === "daily";
+                        const cycleText = isDaily
+                          ? (kt.notifyConfig?.time ? `每天 ${kt.notifyConfig.time}` : "每天定时推送")
+                          : (kt.notifyConfig?.dayOfWeek && kt.notifyConfig.time
+                              ? `${weekdays[kt.notifyConfig.dayOfWeek]} ${kt.notifyConfig.time}`
+                              : "定时推送");
 
                         const botText = kt.notifyConfig?.botId
                           ? botName(kt.notifyConfig.botId)
@@ -763,11 +767,14 @@ export default function DashboardPage() {
                             : "未指定机器人";
 
                         const cycleLabelMap: Record<string, string> = {
+                          yesterday: "前一天",
                           last_week: "上个自然周",
                           past_7_days: "到今天为止前七天",
                           this_week: "本自然周",
                         };
-                        const cycleName = kt.notifyConfig?.cycleType ? cycleLabelMap[kt.notifyConfig.cycleType] || "本自然周" : "本自然周";
+                        const cycleName = kt.notifyConfig?.cycleType
+                          ? cycleLabelMap[kt.notifyConfig.cycleType] || kt.notifyConfig.cycleType
+                          : (isDaily ? "前一天" : "本自然周");
 
                         return (
                           <Link

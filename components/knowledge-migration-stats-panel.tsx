@@ -601,7 +601,7 @@ export function KnowledgeMigrationStatsPanel({
                   <option value="all">全部自然周</option>
                   {stats.weeks.map((w) => (
                     <option key={w.weekKey} value={w.weekKey}>
-                      {w.weekLabel}
+                      {w.weekLabel} {w.isCurrentWeek ? "(当周 / 进行中)" : ""}
                     </option>
                   ))}
                 </select>
@@ -783,6 +783,11 @@ export function KnowledgeMigrationStatsPanel({
                             <span className="text-sm font-semibold text-foreground">
                               {week.weekLabel}
                             </span>
+                            {week.isCurrentWeek && (
+                              <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800 text-[10px] py-0 px-1.5 font-medium">
+                                当周 / 进行中
+                              </Badge>
+                            )}
                             <span className="font-mono text-xs text-muted-foreground">
                               ({week.startDate} ~ {week.endDate})
                             </span>
@@ -828,93 +833,107 @@ export function KnowledgeMigrationStatsPanel({
 
                     {isExpanded && (
                       <CardContent className="p-0">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left text-xs">
-                            <thead className="border-b border-border bg-muted/40 text-[11px] text-muted-foreground">
-                              <tr>
-                                <th className="px-4 py-2.5 font-medium">文档标题</th>
-                                <th className="px-4 py-2.5 font-medium">来源属性</th>
-                                <th className="px-4 py-2.5 font-medium">飞书 ID / Token</th>
-                                <th className="px-4 py-2.5 font-medium">迁移人 / 创建人</th>
-                                <th className="px-4 py-2.5 font-medium">创建 / 迁移时间</th>
-                                <th className="px-4 py-2.5 font-medium text-right">操作</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border/60">
-                              {week.items.map((item) => (
-                                <tr
-                                  key={item.nodeToken}
-                                  className="transition-colors hover:bg-secondary/20"
-                                >
-                                  {/* 标题 */}
-                                  <td className="max-w-72 px-4 py-2.5">
-                                    <div className="flex items-center gap-1.5">
-                                      <FileText className="size-3.5 text-muted-foreground shrink-0" />
+                        {week.items.length === 0 ? (
+                          <div className="p-8 text-center text-xs text-muted-foreground">
+                            {week.isCurrentWeek ? "本自然周进行中，暂无新迁移/入库文档" : "该周暂无文档记录"}
+                          </div>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs">
+                              <thead className="border-b border-border bg-muted/40 text-[11px] text-muted-foreground">
+                                <tr>
+                                  <th className="px-4 py-2.5 font-medium">文档标题</th>
+                                  <th className="px-4 py-2.5 font-medium">来源属性</th>
+                                  <th className="px-4 py-2.5 font-medium">飞书 ID / Token</th>
+                                  <th className="px-4 py-2.5 font-medium">迁移人 / 创建人</th>
+                                  <th className="px-4 py-2.5 font-medium">迁移 / 入库时间</th>
+                                  <th className="px-4 py-2.5 font-medium text-right">操作</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-border/60">
+                                {week.items.map((item) => (
+                                  <tr
+                                    key={item.nodeToken}
+                                    className="transition-colors hover:bg-secondary/20"
+                                  >
+                                    {/* 标题 */}
+                                    <td className="max-w-72 px-4 py-2.5">
+                                      <div className="flex items-center gap-1.5">
+                                        <FileText className="size-3.5 text-muted-foreground shrink-0" />
+                                        <a
+                                          href={item.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="font-medium text-foreground hover:text-primary hover:underline truncate"
+                                          title={item.title}
+                                        >
+                                          {item.title}
+                                        </a>
+                                      </div>
+                                      {(item.primaryCategory || item.secondaryCategory) && (
+                                        <p className="mt-0.5 text-[10px] text-muted-foreground">
+                                          分类：{item.primaryCategory || "—"} / {item.secondaryCategory || "—"}
+                                        </p>
+                                      )}
+                                    </td>
+
+                                    {/* 来源类型 */}
+                                    <td className="px-4 py-2.5">
+                                      {item.origin === "external_feishu" ? (
+                                        <Badge className="bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800 text-[10px]">
+                                          非 Wiki 外部迁移
+                                        </Badge>
+                                      ) : (
+                                        <Badge variant="outline" className="border-blue-300 text-blue-700 dark:border-blue-900 dark:text-blue-300 text-[10px]">
+                                          Wiki 归档迁移
+                                        </Badge>
+                                      )}
+                                    </td>
+
+                                    {/* 飞书 Token */}
+                                    <td className="px-4 py-2.5 font-mono text-[11px] text-muted-foreground">
+                                      {item.nodeToken}
+                                    </td>
+
+                                    {/* 迁移人 / 创建人 */}
+                                    <td className="px-4 py-2.5 font-medium text-foreground">
+                                      <div className="flex items-center gap-1.5">
+                                        <User className="size-3 text-muted-foreground" />
+                                        <span>{item.creatorName}</span>
+                                      </div>
+                                    </td>
+
+                                    {/* 迁移 / 入库时间 */}
+                                    <td className="px-4 py-2.5 text-muted-foreground text-[11px]">
+                                      <div>{formatDate(item.createTime)}</div>
+                                      {item.originalCreateTime && item.originalCreateTime !== item.createTime && (
+                                        <div
+                                          className="text-[10px] text-muted-foreground/70"
+                                          title={`底层原文件创建时间: ${item.originalCreateTime}`}
+                                        >
+                                          原建: {formatDate(item.originalCreateTime).slice(5)}
+                                        </div>
+                                      )}
+                                    </td>
+
+                                    {/* 操作 */}
+                                    <td className="px-4 py-2.5 text-right">
                                       <a
                                         href={item.url}
                                         target="_blank"
                                         rel="noreferrer"
-                                        className="font-medium text-foreground hover:text-primary hover:underline truncate"
-                                        title={item.title}
+                                        className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
                                       >
-                                        {item.title}
+                                        查看飞书
+                                        <ExternalLink className="size-3" />
                                       </a>
-                                    </div>
-                                    {(item.primaryCategory || item.secondaryCategory) && (
-                                      <p className="mt-0.5 text-[10px] text-muted-foreground">
-                                        分类：{item.primaryCategory || "—"} / {item.secondaryCategory || "—"}
-                                      </p>
-                                    )}
-                                  </td>
-
-                                  {/* 来源类型 */}
-                                  <td className="px-4 py-2.5">
-                                    {item.origin === "external_feishu" ? (
-                                      <Badge className="bg-indigo-100 text-indigo-800 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-300 dark:border-indigo-800 text-[10px]">
-                                        非 Wiki 外部迁移
-                                      </Badge>
-                                    ) : (
-                                      <Badge variant="outline" className="border-blue-300 text-blue-700 dark:border-blue-900 dark:text-blue-300 text-[10px]">
-                                        Wiki 归档迁移
-                                      </Badge>
-                                    )}
-                                  </td>
-
-                                  {/* 飞书 Token */}
-                                  <td className="px-4 py-2.5 font-mono text-[11px] text-muted-foreground">
-                                    {item.nodeToken}
-                                  </td>
-
-                                  {/* 迁移人 / 创建人 */}
-                                  <td className="px-4 py-2.5 font-medium text-foreground">
-                                    <div className="flex items-center gap-1.5">
-                                      <User className="size-3 text-muted-foreground" />
-                                      <span>{item.creatorName}</span>
-                                    </div>
-                                  </td>
-
-                                  {/* 创建时间 */}
-                                  <td className="px-4 py-2.5 text-muted-foreground text-[11px]">
-                                    {formatDate(item.createTime)}
-                                  </td>
-
-                                  {/* 操作 */}
-                                  <td className="px-4 py-2.5 text-right">
-                                    <a
-                                      href={item.url}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="inline-flex items-center gap-1 text-xs text-blue-600 hover:underline"
-                                    >
-                                      查看飞书
-                                      <ExternalLink className="size-3" />
-                                    </a>
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
                       </CardContent>
                     )}
                   </Card>

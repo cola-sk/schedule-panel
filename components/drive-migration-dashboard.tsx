@@ -1273,6 +1273,9 @@ export function DriveMigrationDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: `迁移「${file.name}」`,
+          sourceFolderUrl: folderUrl.trim(),
+          sourceFolderToken: scanResult?.folderInfo?.token,
+          sourceFolderName: scanResult?.folderInfo?.name,
           targetWikiUrl: wikiUrl.trim(),
           targetParentNodeToken: hierarchy.rootToken,
           items: [
@@ -1350,6 +1353,9 @@ export function DriveMigrationDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: `迁移目录「${node.name}」 (${payloadItems.length} 篇)`,
+          sourceFolderUrl: folderUrl.trim(),
+          sourceFolderToken: scanResult?.folderInfo?.token,
+          sourceFolderName: scanResult?.folderInfo?.name,
           targetWikiUrl: wikiUrl.trim(),
           targetParentNodeToken: hierarchy.rootToken,
           items: payloadItems,
@@ -1505,6 +1511,9 @@ export function DriveMigrationDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: `批量迁移文档 (${payloadItems.length} 篇)`,
+          sourceFolderUrl: folderUrl.trim(),
+          sourceFolderToken: scanResult?.folderInfo?.token,
+          sourceFolderName: scanResult?.folderInfo?.name,
           targetWikiUrl: wikiUrl.trim(),
           targetParentNodeToken: hierarchy.rootToken,
           items: payloadItems,

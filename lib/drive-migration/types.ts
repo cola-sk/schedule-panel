@@ -92,6 +92,9 @@ export interface MigrationTaskItemDetail {
 export interface DriveMigrationTask {
   id: string;
   name: string;
+  sourceFolderUrl?: string;
+  sourceFolderToken?: string;
+  sourceFolderName?: string;
   targetWikiUrl: string;
   targetParentNodeToken?: string;
   status: MigrationTaskStatus;
@@ -107,4 +110,56 @@ export interface DriveMigrationTask {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface MigratedFileRecord {
+  fileToken: string;
+  fileName: string;
+  fileType: string;
+  sourceDriveToken?: string;
+  sourceDriveUrl?: string;
+  sourceDriveName?: string;
+  targetWikiUrl: string;
+  targetParentNodeToken?: string;
+  wikiToken?: string;
+  wikiUrl?: string;
+  migratedAt: string;
+  status: "success" | "failed" | "skipped";
+  error?: string;
+  taskId?: string;
+}
+
+export interface DriveFolderStat {
+  folderToken: string;
+  folderUrl?: string;
+  folderName?: string;
+  totalMigratedFiles: number;
+  successCount: number;
+  failedCount: number;
+  lastMigratedAt: string;
+  fileTokens: string[];
+}
+
+export interface TargetWikiStat {
+  targetWikiUrl: string;
+  spaceId?: string;
+  totalMigratedFiles: number;
+  successCount: number;
+  failedCount: number;
+  lastMigratedAt: string;
+  fileTokens: string[];
+}
+
+export interface DriveMigrationStats {
+  totalFiles: number;
+  successFiles: number;
+  failedFiles: number;
+  skippedFiles: number;
+  totalDrivesCount: number;
+  totalTargetWikisCount: number;
+  drives: Record<string, DriveFolderStat>;
+  targetWikis: Record<string, TargetWikiStat>;
+  records: MigratedFileRecord[];
+  updatedAt: string;
+}
+
 

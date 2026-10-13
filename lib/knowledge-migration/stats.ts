@@ -19,6 +19,7 @@ import type {
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const USER_NAME_CACHE_FILE = path.join(DATA_DIR, "feishu-user-name-cache.json");
+const LEDGER_FILE = path.join(DATA_DIR, "knowledge-node-ingestion-ledger.json");
 
 type UserNameCache = Record<string, string>;
 
@@ -45,6 +46,42 @@ function writeUserNameCache(cache: UserNameCache) {
   }
 }
 
+export interface NodeIngestionRecord {
+  nodeToken: string;
+  documentToken?: string;
+  title?: string;
+  ingestedAt: string; // ISO 格式入库时间
+  originalCreateTime?: string; // 原始草拟创建时间
+  operatorId?: string; // 贡献/迁移操作人 open_id
+  operatorName?: string; // 贡献/迁移操作人姓名
+  source?: "wiki_migration" | "feishu_node" | "first_seen";
+}
+
+type IngestionLedger = Record<string, NodeIngestionRecord>;
+
+export function readIngestionLedger(): IngestionLedger {
+  try {
+    if (fs.existsSync(LEDGER_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(LEDGER_FILE, "utf-8")) as IngestionLedger;
+      if (parsed && typeof parsed === "object") return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+export function writeIngestionLedger(ledger: IngestionLedger) {
+  try {
+    fs.mkdirSync(path.dirname(LEDGER_FILE), { recursive: true });
+    const tempFile = `${LEDGER_FILE}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(ledger, null, 2), "utf-8");
+    fs.renameSync(tempFile, LEDGER_FILE);
+  } catch {
+    // ignore
+  }
+}
+
 interface RawFeishuNode {
   node_token: string;
   obj_token?: string;
@@ -55,13 +92,18 @@ interface RawFeishuNode {
   obj_create_time?: string;
   creator?: string;
   owner?: string;
+  node_creator?: string;
   has_child?: boolean;
 }
  
 /**
  * 高性能 BFS 分层批次并发扫描飞书知识库全量节点
  */
-async function listAllFeishuNodes(spaceId: string, rootWikiToken: string): Promise<RawFeishuNode[]> {
+async function listAllFeishuNodes(
+  spaceId: string,
+  rootWikiToken: string,
+  knownDirectoryTokens?: Set<string>,
+): Promise<RawFeishuNode[]> {
   const client = getFeishuClient();
   const allNodes: RawFeishuNode[] = [];
   const visitedTokens = new Set<string>();
@@ -115,9 +157,11 @@ async function listAllFeishuNodes(spaceId: string, rootWikiToken: string): Promi
   allNodes.push(...currentLayer);
   let layerNum = 1;
 
-  // 2. BFS 分层批次并发推进
+  // 2. BFS 分层批次并发推进（针对已知分类目录及飞书返回 has_child 的目录均展开拉取，避免漏扫）
   while (currentLayer.length > 0) {
-    const nodesWithChild = currentLayer.filter((n) => n.has_child);
+    const nodesWithChild = currentLayer.filter(
+      (n) => Boolean(n.has_child || (knownDirectoryTokens && knownDirectoryTokens.has(n.node_token)))
+    );
     if (nodesWithChild.length === 0) break;
 
     const nextLayerChildren = await Promise.all(
@@ -195,49 +239,65 @@ async function resolveUserNames(userIds: string[]): Promise<Record<string, strin
   return cache;
 }
 
-function parseCreateTimestamp(node: RawFeishuNode): Date {
-  const raw = node.node_create_time || node.obj_create_time;
-  if (!raw) return new Date();
+function parseRawTimestamp(raw?: string | number): Date | null {
+  if (!raw) return null;
   const num = Number(raw);
   if (!Number.isNaN(num) && num > 0) {
     // 判断是秒级还是毫秒级时间戳
     return new Date(num > 1e11 ? num : num * 1000);
   }
   const parsed = new Date(raw);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function getISOWeekInfo(date: Date): { weekKey: string; weekLabel: string; startDate: string; endDate: string; sortKey: number } {
-  // 计算当周周一
-  const mon = new Date(date);
-  const currentDay = mon.getDay() || 7; // 1: Mon ... 7: Sun
-  mon.setDate(mon.getDate() - currentDay + 1);
+function parseCreateTimestamp(node: RawFeishuNode): Date {
+  return parseRawTimestamp(node.node_create_time || node.obj_create_time) || new Date();
+}
+
+function getISOWeekInfo(
+  date: Date,
+  now = new Date(),
+): {
+  weekKey: string;
+  weekLabel: string;
+  startDate: string;
+  endDate: string;
+  sortKey: number;
+  isCurrentWeek: boolean;
+} {
+  // 基于北京时间 (Asia/Shanghai) 计算自然周 (周一 00:00 至 周日 23:59:59)
+  const dShanghai = atShanghaiLocal(date, "00:00");
+  const weekday = chinaWeekday(date); // 1: Mon ... 7: Sun
+  const mon = new Date(dShanghai.getTime() - (weekday - 1) * 86400000);
   mon.setHours(0, 0, 0, 0);
 
-  // 计算当周周日
-  const sun = new Date(mon);
-  sun.setDate(sun.getDate() + 6);
+  const sun = new Date(mon.getTime() + 6 * 86400000);
   sun.setHours(23, 59, 59, 999);
 
   // 计算 ISO 周数 (基于当周周四)
-  const thu = new Date(mon);
-  thu.setDate(thu.getDate() + 3);
+  const thu = new Date(mon.getTime() + 3 * 86400000);
   const year = thu.getFullYear();
   const firstJan = new Date(year, 0, 1);
   const days = Math.floor((thu.getTime() - firstJan.getTime()) / 86400000);
   const weekNo = Math.ceil((days + firstJan.getDay() + 1) / 7);
 
   const pad = (n: number) => String(n).padStart(2, "0");
-  const formatDate = (dt: Date) => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
-  const formatShort = (dt: Date) => `${pad(dt.getMonth() + 1)}/${pad(dt.getDate())}`;
+  const monKey = chinaDateKey(mon);
+  const sunKey = chinaDateKey(sun);
+  const formatShort = (key: string) => key.slice(5).replace("-", "/");
 
   const weekKey = `${year}-W${pad(weekNo)}`;
-  const weekLabel = `${year}年第${weekNo}周 (${formatShort(mon)} - ${formatShort(sun)})`;
-  const startDate = formatDate(mon);
-  const endDate = formatDate(sun);
+  const weekLabel = `${year}年第${weekNo}周 (${formatShort(monKey)} - ${formatShort(sunKey)})`;
+  const startDate = monKey;
+  const endDate = sunKey;
   const sortKey = mon.getTime();
 
-  return { weekKey, weekLabel, startDate, endDate, sortKey };
+  // 判断是否为当前北京时间所在周
+  const nowWeekday = chinaWeekday(now);
+  const nowMonday = new Date(atShanghaiLocal(now, "00:00").getTime() - (nowWeekday - 1) * 86400000);
+  const isCurrentWeek = mon.getTime() === nowMonday.getTime();
+
+  return { weekKey, weekLabel, startDate, endDate, sortKey, isCurrentWeek };
 }
 
 /**
@@ -268,11 +328,31 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
     // ignore
   }
 
-  // 1. 全量扫描飞书知识库节点
-  const rawNodes = await listAllFeishuNodes(spaceId, parsed.wikiToken);
+  // 1. 构建已知目标目录集合（防飞书 API has_child: false 漏扫）
+  const knownDirectoryTokens = new Set<string>();
+  for (const dir of task.targetDirectories || []) {
+    if (dir.nodeToken) knownDirectoryTokens.add(dir.nodeToken);
+    for (const child of dir.children || []) {
+      if (child.nodeToken) knownDirectoryTokens.add(child.nodeToken);
+    }
+  }
 
-  // 2. 收集所有创建人 ID 并批量解析姓名
-  const allUserIds = rawNodes.map((n) => n.creator || n.owner || "").filter(Boolean);
+  // 读取本地持久化入库账本（锁定历史真实入库时间）
+  const ledger = readIngestionLedger();
+
+  // 全量扫描飞书知识库节点
+  const rawNodes = await listAllFeishuNodes(spaceId, parsed.wikiToken, knownDirectoryTokens);
+
+  // 构建全量原始节点索引表（用于拓扑父节点时间对比与因果校验）
+  const rawNodeMap = new Map<string, RawFeishuNode>();
+  for (const node of rawNodes) {
+    rawNodeMap.set(node.node_token, node);
+  }
+
+  // 2. 收集所有创建人 / 节点操作人 ID 并批量解析姓名
+  const allUserIds = rawNodes
+    .map((n) => n.node_creator || n.creator || n.owner || "")
+    .filter(Boolean);
   const userNameMap = await resolveUserNames(allUserIds);
 
   // 3. 构建本地 Wiki 归档文档映射索引与目标知识库目录映射
@@ -300,7 +380,7 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
     }
   }
 
-  function resolveDocCategory(node: RawFeishuNode): { primary: string; secondary?: string } {
+  function resolveDocCategory(node: { parent_node_token?: string }): { primary: string; secondary?: string } {
     let curr = node.parent_node_token;
     let guard = 0;
     while (curr && guard < 15) {
@@ -312,8 +392,9 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
     return { primary: "未归类/空间根目录" };
   }
 
-  // 4. 将每个飞书节点标记为 Wiki 迁移文档或外部非 Wiki 文档
+  // 4. 将每个飞书节点标记为 Wiki 迁移文档或外部非 Wiki 文档，并基于“实际入库时间”精确归集
   const docItems: FeishuFullDocItem[] = [];
+  const scanTime = new Date();
 
   for (const node of rawNodes) {
     const matchedWiki =
@@ -323,31 +404,58 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
     const isWiki = Boolean(matchedWiki);
     const originType: MigrationDocOrigin = isWiki ? "wiki_migration" : "external_feishu";
 
-    // 确定时间
-    let docDate = parseCreateTimestamp(node);
+    // 原始底层创建时间 (保留作为参考)
+    const rawOriginalDt = parseRawTimestamp(node.obj_create_time || node.node_create_time);
+    const originalCreateTime = rawOriginalDt ? rawOriginalDt.toISOString() : undefined;
+
+    // 实际迁移/入库时间判定 (Ingestion Time)：
+    // 优先级 1: Wiki 归档系统完成时间 matchedWiki.migratedAt
+    // 优先级 2: 本地持久化账本记录时间 ledger[token].ingestedAt (基线稳定，锁定不漂移)
+    // 优先级 3: 知识库新出现的节点 (首次扫描发现): 无论其底层文件何时在个人网盘草拟，其实际进入知识库的贡献时间，确立为首次被扫描发现的当前入库时间 (当周)
+    let docDate: Date;
+    let ingestionSource: NodeIngestionRecord["source"] = "feishu_node";
+
     if (matchedWiki?.migratedAt) {
-      const mDate = new Date(matchedWiki.migratedAt);
-      if (!Number.isNaN(mDate.getTime())) {
-        docDate = mDate;
-      }
+      const parsedDt = new Date(matchedWiki.migratedAt);
+      docDate = !Number.isNaN(parsedDt.getTime()) ? parsedDt : new Date();
+      ingestionSource = "wiki_migration";
+    } else if (ledger[node.node_token]?.ingestedAt) {
+      const parsedDt = new Date(ledger[node.node_token].ingestedAt);
+      docDate = !Number.isNaN(parsedDt.getTime()) ? parsedDt : new Date();
+      ingestionSource = ledger[node.node_token].source || "feishu_node";
+    } else if (node.obj_token && ledger[node.obj_token]?.ingestedAt) {
+      const parsedDt = new Date(ledger[node.obj_token].ingestedAt);
+      docDate = !Number.isNaN(parsedDt.getTime()) ? parsedDt : new Date();
+      ingestionSource = ledger[node.obj_token].source || "feishu_node";
+    } else {
+      docDate = scanTime;
+      ingestionSource = "first_seen";
     }
 
-    // 确定创建人/迁移人姓名
+    // 确定迁移/创建人员姓名
     let personName = "未知成员";
-    let creatorId = node.creator || node.owner;
+    let creatorId = node.node_creator || node.creator || node.owner;
 
     if (isWiki) {
       personName =
         matchedWiki?.approvedBy?.trim() ||
         task.config.defaultOperatorName?.trim() ||
         "Wiki 归档系统";
-      // 若是真实成员审批的归档文档，不要将飞书 OpenAPI 机器人的 open_id 作为该成员的 creatorId
       if (personName !== "Wiki 归档系统" && creatorId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
         const matchedUserId = Object.entries(userNameMap).find(([, name]) => name === personName)?.[0];
         creatorId = matchedUserId || undefined;
       }
+    } else if (ledger[node.node_token]?.operatorName) {
+      personName = ledger[node.node_token].operatorName!;
+      creatorId = ledger[node.node_token].operatorId || creatorId;
     } else {
-      personName = (creatorId ? userNameMap[creatorId] : undefined) || "飞书成员";
+      // 外部移入文档：若 node_creator 为 OpenAPI 机器人（通过系统或 API 移入），操作人归属于文档拥有者
+      let targetUserId = node.node_creator;
+      if (!targetUserId || targetUserId === "ou_8a0d18f26e02a0a5add005b36c2d8eb8") {
+        targetUserId = node.creator || node.owner;
+      }
+      personName = (targetUserId ? userNameMap[targetUserId] : undefined) || "飞书成员";
+      creatorId = targetUserId;
     }
 
     // 确定分类：Wiki 优先使用归档分类，非 Wiki 通过目录拓扑推断
@@ -359,12 +467,13 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
       docSecondaryCategory = resolved.secondary;
     }
 
-    docItems.push({
+    const docItem: FeishuFullDocItem = {
       nodeToken: node.node_token,
       documentToken: node.obj_token || node.node_token,
       title: node.title || (matchedWiki?.finalTitle ?? "未命名文档"),
       url: `${origin}/wiki/${node.node_token}`,
       createTime: docDate.toISOString(),
+      originalCreateTime,
       creatorId,
       creatorName: personName,
       origin: originType,
@@ -372,8 +481,24 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
       primaryCategory: docPrimaryCategory,
       secondaryCategory: docSecondaryCategory,
       parentNodeToken: node.parent_node_token,
-    });
+    };
+    docItems.push(docItem);
+
+    // 同步写入持久化入库账本
+    ledger[node.node_token] = {
+      nodeToken: node.node_token,
+      documentToken: node.obj_token || node.node_token,
+      title: docItem.title,
+      ingestedAt: docItem.createTime,
+      originalCreateTime,
+      operatorId: creatorId,
+      operatorName: personName,
+      source: ingestionSource,
+    };
   }
+
+  // 保存最新账本
+  writeIngestionLedger(ledger);
 
   // 5. 按自然周聚合
   interface WeekBucket {
@@ -382,14 +507,27 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
     startDate: string;
     endDate: string;
     sortKey: number;
+    isCurrentWeek: boolean;
     items: FeishuFullDocItem[];
   }
 
   const weekMap = new Map<string, WeekBucket>();
 
+  // 确保当前进行中的自然周必然存在于周度桶中 (常驻展示)
+  const currentWeekInfo = getISOWeekInfo(scanTime, scanTime);
+  weekMap.set(currentWeekInfo.weekKey, {
+    weekKey: currentWeekInfo.weekKey,
+    weekLabel: currentWeekInfo.weekLabel,
+    startDate: currentWeekInfo.startDate,
+    endDate: currentWeekInfo.endDate,
+    sortKey: currentWeekInfo.sortKey,
+    isCurrentWeek: true,
+    items: [],
+  });
+
   for (const doc of docItems) {
     const docDate = new Date(doc.createTime);
-    const { weekKey, weekLabel, startDate, endDate, sortKey } = getISOWeekInfo(docDate);
+    const { weekKey, weekLabel, startDate, endDate, sortKey, isCurrentWeek } = getISOWeekInfo(docDate, scanTime);
 
     if (!weekMap.has(weekKey)) {
       weekMap.set(weekKey, {
@@ -398,6 +536,7 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
         startDate,
         endDate,
         sortKey,
+        isCurrentWeek,
         items: [],
       });
     }
@@ -462,6 +601,7 @@ export async function generateMigrationWeeklyStats(taskId: string): Promise<Task
       totalCount: bucket.items.length,
       nonWikiCount,
       wikiCount,
+      isCurrentWeek: bucket.isCurrentWeek,
       persons,
       items: bucket.items.sort((a, b) => new Date(b.createTime).getTime() - new Date(a.createTime).getTime()),
     };

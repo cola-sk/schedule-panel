@@ -222,7 +222,8 @@ export interface FeishuFullDocItem {
   documentToken: string;
   title: string;
   url: string;
-  createTime: string; // ISO 格式时间
+  createTime: string; // 实际迁移/入库知识库时间 (ISO 格式)
+  originalCreateTime?: string; // 原始文件在网盘或本地的底层草拟创建时间 (ISO 格式)
   creatorId?: string;
   creatorName: string;
   origin: MigrationDocOrigin;
@@ -254,6 +255,7 @@ export interface MigrationWeeklyStat {
   totalCount: number;
   nonWikiCount: number; // 除 Wiki 之外迁移/新建的文档数
   wikiCount: number;    // Wiki 归档系统迁移的文档数
+  isCurrentWeek?: boolean; // 是否为当前进行中的自然周
   persons: MigrationPersonStat[];
   items: FeishuFullDocItem[];
 }
