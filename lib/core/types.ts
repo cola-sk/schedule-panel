@@ -37,6 +37,7 @@ export interface ReminderSchedule {
   postponedDates?: string[];
   hostOverrides?: Record<string, RotationMember & { isSwapped?: boolean }>;
   lastSentAt?: string;
+  lastScheduledSentAt?: string;
   atAll?: boolean;
 }
 

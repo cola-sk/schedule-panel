@@ -541,9 +541,9 @@ export default function DashboardPage() {
   // 只展示有定时任务（已启用定时通知）的知识库任务
   const scheduledKnowledgeTasks = knowledgeTasks.filter((kt) => Boolean(kt.notifyConfig?.enabled));
 
-  // 本周执行计划
-  const thisWeekTasks = (data?.tasks ?? []).filter((task) => isThisWeek(task.scheduledAt));
-  const nextTask = data?.tasks[0];
+  // 本周执行计划（仅包含待执行任务）
+  const thisWeekTasks = (data?.tasks ?? []).filter((task) => task.status !== "sent" && isThisWeek(task.scheduledAt));
+  const nextTask = (data?.tasks ?? []).find((task) => task.status !== "sent");
 
   // 当前选中的详情任务
   const selectedSchedule = data?.schedules.find((item) => item.id === selectedScheduleId);
@@ -851,7 +851,7 @@ export default function DashboardPage() {
                         </thead>
                         <tbody className="divide-y divide-border">
                           {thisWeekTasks.map((task) => {
-                            const isDue = new Date(task.scheduledAt).getTime() <= Date.now();
+                            const isDue = task.status !== "sent" && new Date(task.scheduledAt).getTime() <= Date.now();
                             const isKnowledgeMigration = task.scheduleId.startsWith("knowledge-migration:");
                             const kmTaskId = isKnowledgeMigration ? task.scheduleId.replace("knowledge-migration:", "") : null;
                             const kmTask = kmTaskId ? knowledgeTasks.find((kt) => kt.id === kmTaskId) : null;

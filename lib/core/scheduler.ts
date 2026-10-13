@@ -126,8 +126,8 @@ export function isOccurrenceSent(scheduleId: string, scheduledAt: Date): boolean
   if (!schedule) return false;
 
   const targetDateKey = chinaDateKey(scheduledAt);
-  // 如果 schedule.lastSentAt 记录的自然日正好是该目标日，说明本周期已发送
-  if (schedule.lastSentAt && chinaDateKey(new Date(schedule.lastSentAt)) === targetDateKey) {
+  // 仅当该周期已有定时任务成功发送的记录时，才视为本周期已发送
+  if (schedule.lastScheduledSentAt && chinaDateKey(new Date(schedule.lastScheduledSentAt)) === targetDateKey) {
     return true;
   }
 
@@ -136,7 +136,8 @@ export function isOccurrenceSent(scheduleId: string, scheduledAt: Date): boolean
     (task) =>
       task.scheduleId === scheduleId &&
       task.status === "sent" &&
-      (task.id === isoId || (task.triggerType === "scheduled" && chinaDateKey(new Date(task.scheduledAt)) === targetDateKey)),
+      task.triggerType === "scheduled" &&
+      (task.id === isoId || chinaDateKey(new Date(task.scheduledAt)) === targetDateKey),
   );
 }
 
@@ -158,11 +159,10 @@ export function getNextAvailableOccurrenceDate(
   const daysDiff = schedule.dayOfWeek - currentWeekday;
   let candidate = new Date(todayShanghai.getTime() + daysDiff * 24 * 60 * 60 * 1000);
 
-  // 判断当前自然周的目标时间点是否已经过去或已发送
+  // 判断当前自然周的目标时间点是否已有定时任务执行过或已过去（手动触发不影响）
   const candidateKey = chinaDateKey(candidate);
   const candidateTime = candidate.getTime();
-  const lastSentKey = schedule.lastSentAt ? chinaDateKey(new Date(schedule.lastSentAt)) : "";
-  const alreadySentThisPeriod = lastSentKey === candidateKey;
+  const alreadySentThisPeriod = Boolean(schedule.lastScheduledSentAt && chinaDateKey(new Date(schedule.lastScheduledSentAt)) === candidateKey);
   const isPast = candidateTime < now.getTime() - lookbackMs;
 
   if (alreadySentThisPeriod || isPast) {
@@ -460,6 +460,7 @@ export async function dispatchDueTasks(): Promise<Array<{ id: string; status: "s
         }
         updateSchedule(schedule.id, {
           lastSentAt: completed.sentAt,
+          lastScheduledSentAt: completed.sentAt,
           currentIndex: nextIndex,
           hostOverrides: nextOverrides,
         });
@@ -510,14 +511,14 @@ export async function syncScheduleRotation(scheduleId: string): Promise<Rotation
   }
 
   replaceRotation(schedule.id, rotation);
-  updateSchedule(schedule.id, { currentIndex: newIndex, hostOverrides: {}, lastSentAt: undefined });
+  updateSchedule(schedule.id, { currentIndex: newIndex, hostOverrides: {}, lastSentAt: undefined, lastScheduledSentAt: undefined });
   return rotation;
 }
 
 /**
  * 获取指定 Schedule 当前即将执行任务的值班人员索引
  */
-export async function getNextHostIndex(scheduleId: string): Promise<number> {
+export function getNextHostIndex(scheduleId: string): number {
   const schedule = getSchedule(scheduleId);
   if (!schedule || !schedule.rotation || schedule.rotation.length === 0) return 0;
   return typeof schedule.currentIndex === "number" ? schedule.currentIndex % schedule.rotation.length : 0;
@@ -538,7 +539,7 @@ export async function setCurrentHost(scheduleId: string, targetIndex: number): P
     throw new Error("目标值班人索引超出范围");
   }
 
-  const updated = updateSchedule(schedule.id, { currentIndex: targetIndex, hostOverrides: {}, lastSentAt: undefined });
+  const updated = updateSchedule(schedule.id, { currentIndex: targetIndex, hostOverrides: {}, lastSentAt: undefined, lastScheduledSentAt: undefined });
   if (!updated) throw new Error("更新定时任务失败");
   return updated;
 }

@@ -101,6 +101,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
         : prevConfig.silentDailyScanEnabled !== false,
       lastSilentScannedAt: prevConfig.lastSilentScannedAt,
       lastSentAt: prevConfig.lastSentAt,
+      lastScheduledSentAt: prevConfig.lastScheduledSentAt,
     };
 
     const saved = saveTaskNotifyConfig(taskId, nextConfig);

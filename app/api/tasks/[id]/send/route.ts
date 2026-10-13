@@ -20,7 +20,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       const { sendTaskStatsNotification } = await import("@/lib/knowledge-migration/notifier");
       const { getTask } = await import("@/lib/knowledge-migration/store");
       const kmTask = getTask(kmTaskId);
-      const result = await sendTaskStatsNotification(kmTaskId);
+      const result = await sendTaskStatsNotification(kmTaskId, undefined, undefined, undefined, undefined, "manual");
       const sent = recordTask({
         id: fullId,
         scheduleId: `knowledge-migration:${kmTaskId}`,

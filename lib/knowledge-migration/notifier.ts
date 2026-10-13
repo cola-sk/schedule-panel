@@ -1,9 +1,9 @@
 import "server-only";
 import fs from "fs";
 import { sendWebhookMessage } from "@/lib/core/feishu-client";
-import { atShanghaiLocal, chinaDateKey, chinaWeekday } from "@/lib/core/scheduler";
+import { atShanghaiLocal, chinaDateKey, chinaWeekday, CATCHUP_WINDOW_MS } from "@/lib/core/scheduler";
 import { generateMigrationWeeklyStats, computeCycleStats, computeSubdirectoryStats } from "./stats";
-import { getBot, recordTask } from "@/lib/core/store";
+import { getBot, getRecentTasks, recordTask } from "@/lib/core/store";
 import { getFeishuClient } from "@/lib/mcp/feishu-doc-engine";
 import { renderStatsDashboardImage } from "./image-generator";
 import {
@@ -20,7 +20,12 @@ import type { FeishuMessagePayload, ReminderTask } from "@/lib/core/types";
  * 计算统计通知下一次应执行的时间。该结果与定时派发器的每日/每周、按北京时间规则一致，
  * 仅用于向页面展示计划；真正的发送仍由 Cron 派发入口负责。
  */
-export function getNextMigrationStatsRunAt(config?: TaskNotifyConfig, now = new Date()): string | undefined {
+export function getNextMigrationStatsRunAt(
+  config?: TaskNotifyConfig,
+  now = new Date(),
+  lookbackMs = 0,
+  taskId?: string,
+): string | undefined {
   if (!config?.enabled) return undefined;
 
   const frequency = config.frequency || "weekly";
@@ -34,12 +39,22 @@ export function getNextMigrationStatsRunAt(config?: TaskNotifyConfig, now = new 
   const intervalDays = frequency === "daily" ? 1 : 7;
   let daysUntilRun = dayOfWeek - chinaWeekday(now);
   if (frequency === "daily") daysUntilRun = 0;
-  if (daysUntilRun < 0 || (daysUntilRun === 0 && todayAtScheduledTime.getTime() <= now.getTime())) {
+  if (daysUntilRun < 0) {
+    daysUntilRun += intervalDays;
+  }
+
+  const candidate = new Date(todayAtScheduledTime.getTime() + daysUntilRun * 24 * 60 * 60 * 1000);
+  const alreadySent = hasSentScheduledOccurrence(config, candidate, taskId);
+  const isPast = candidate.getTime() < now.getTime() - lookbackMs;
+
+  if (alreadySent || isPast) {
     daysUntilRun += intervalDays;
   }
 
   let nextRun = new Date(todayAtScheduledTime.getTime() + daysUntilRun * 24 * 60 * 60 * 1000);
-  if (hasSentScheduledOccurrence(config, nextRun)) {
+  let guard = 0;
+  while (hasSentScheduledOccurrence(config, nextRun, taskId) && guard < 100) {
+    guard += 1;
     nextRun = new Date(nextRun.getTime() + intervalDays * 24 * 60 * 60 * 1000);
   }
 
@@ -47,21 +62,73 @@ export function getNextMigrationStatsRunAt(config?: TaskNotifyConfig, now = new 
 }
 
 /**
- * 判断某个计划执行点是否已经完成。
- *
- * 测试发送也会保留 lastSentAt 以便展示发送历史，但它不应消耗尚未到点的定时执行。
- * 因此只有发送时间达到该执行点后，才认为该执行点已完成。
+ * 推算所有启用知识库任务未来的待执行排期计划（仅包含未执行的待办项，已发送的排期将自动后移）
  */
-function hasSentScheduledOccurrence(config: TaskNotifyConfig, scheduledAt: Date): boolean {
-  if (!config.lastSentAt) return false;
+export function upcomingMigrationStatsTasks(
+  limit = 50,
+  now = new Date(),
+  lookbackMs = CATCHUP_WINDOW_MS,
+): ReminderTask[] {
+  const upcoming: ReminderTask[] = [];
 
-  const lastSentAt = new Date(config.lastSentAt);
-  if (Number.isNaN(lastSentAt.getTime())) return false;
+  for (const task of getTasks()) {
+    if (!task.notifyConfig?.enabled) continue;
 
-  return (
-    chinaDateKey(lastSentAt) === chinaDateKey(scheduledAt) &&
-    lastSentAt.getTime() >= scheduledAt.getTime()
-  );
+    const firstRunAt = getNextMigrationStatsRunAt(task.notifyConfig, now, lookbackMs, task.id);
+    if (!firstRunAt) continue;
+
+    const intervalDays = task.notifyConfig.frequency === "daily" ? 1 : 7;
+    let occurrence = new Date(firstRunAt);
+    let count = 0;
+    const maxPerTask = Math.min(limit, 50);
+
+    while (count < maxPerTask) {
+      upcoming.push({
+        id: `knowledge-migration:${task.id}:${occurrence.toISOString()}`,
+        scheduleId: `knowledge-migration:${task.id}`,
+        scheduleName: `知识库统计 · ${task.name}`,
+        host: { name: "定时任务" },
+        scheduledAt: occurrence.toISOString(),
+        status: "pending",
+        triggerType: "scheduled",
+        content: `按计划将基于所选周期生成知识库全量与重点子目录统计，并推送到关联飞书群`,
+      });
+      count += 1;
+      occurrence = new Date(occurrence.getTime() + intervalDays * 24 * 60 * 60 * 1000);
+    }
+  }
+
+  return upcoming.sort((a, b) => a.scheduledAt.localeCompare(b.scheduledAt)).slice(0, limit);
+}
+
+/**
+ * 判断某个计划执行点是否已经通过定时任务完成。
+ * 手动测试/手动发送不会影响定时任务的正常执行。
+ */
+function hasSentScheduledOccurrence(config: TaskNotifyConfig, scheduledAt: Date, taskId?: string): boolean {
+  if (config.lastScheduledSentAt) {
+    const lastScheduled = new Date(config.lastScheduledSentAt);
+    if (!Number.isNaN(lastScheduled.getTime())) {
+      return (
+        chinaDateKey(lastScheduled) === chinaDateKey(scheduledAt) &&
+        lastScheduled.getTime() >= scheduledAt.getTime()
+      );
+    }
+  }
+
+  // 兜底：检查最近任务历史中是否已有该知识库任务当天的定时发送记录（仅统计定时任务）
+  if (taskId) {
+    const targetDateKey = chinaDateKey(scheduledAt);
+    return getRecentTasks().some(
+      (task) =>
+        task.scheduleId === `knowledge-migration:${taskId}` &&
+        task.status === "sent" &&
+        task.triggerType === "scheduled" &&
+        chinaDateKey(new Date(task.scheduledAt)) === targetDateKey,
+    );
+  }
+
+  return false;
 }
 
 /**
@@ -128,7 +195,7 @@ export function migrationStatsTasksBetween(start: Date, end: Date, now = new Dat
     // 2. 推算未来的待执行排期（已发生历史推送的自然日不再重复显示待办排期）
     if (task.notifyConfig?.enabled && end.getTime() >= now.getTime()) {
       const baseline = new Date(Math.max(now.getTime(), start.getTime() - 1));
-      const firstRunAt = getNextMigrationStatsRunAt(task.notifyConfig, baseline);
+      const firstRunAt = getNextMigrationStatsRunAt(task.notifyConfig, baseline, 0, task.id);
       if (firstRunAt) {
         const intervalDays = task.notifyConfig.frequency === "daily" ? 1 : 7;
         let occurrence = new Date(firstRunAt);
@@ -466,6 +533,7 @@ export async function sendTaskStatsNotification(
     saveTaskNotifyConfig(taskId, {
       ...task.notifyConfig,
       lastSentAt: sendTime,
+      ...(triggerType === "scheduled" ? { lastScheduledSentAt: sendTime } : {}),
     });
   }
 
@@ -540,7 +608,7 @@ export async function dispatchDueMigrationStats(): Promise<Array<{ taskId: strin
     // 检查今天是否已经发送过
     // 检查执行时间与 1 小时窗口
     const scheduledTime = atShanghaiLocal(now, notifyConfig.time || "18:00");
-    if (hasSentScheduledOccurrence(notifyConfig, scheduledTime)) {
+    if (hasSentScheduledOccurrence(notifyConfig, scheduledTime, task.id)) {
       continue;
     }
 
@@ -551,7 +619,7 @@ export async function dispatchDueMigrationStats(): Promise<Array<{ taskId: strin
 
     // 到期触发发送
     try {
-      await sendTaskStatsNotification(task.id);
+      await sendTaskStatsNotification(task.id, undefined, undefined, undefined, undefined, "scheduled");
       results.push({ taskId: task.id, status: "sent" });
     } catch (err: any) {
       console.error(`[知识库归档] 任务 ${task.name}(${task.id}) 发送定时统计失败:`, err);

@@ -78,7 +78,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           time: task.notifyConfig?.time || "18:00",
           lastSentAt: task.notifyConfig?.lastSentAt,
           cycleType: task.notifyConfig?.cycleType,
-          nextRunAt: task.notifyConfig ? getNextMigrationStatsRunAt(task.notifyConfig) : undefined,
+          nextRunAt: task.notifyConfig ? getNextMigrationStatsRunAt(task.notifyConfig, undefined, 0, task.id) : undefined,
           silentDailyScanEnabled: task.notifyConfig?.silentDailyScanEnabled !== false,
           lastSilentScannedAt: task.notifyConfig?.lastSilentScannedAt,
         },
