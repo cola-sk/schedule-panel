@@ -9,9 +9,13 @@ import { startBackgroundMigrationTask } from "@/lib/drive-migration/service";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    const tasks = getDriveMigrationTasks();
+    const { searchParams } = new URL(request.url);
+    const clientId = searchParams.get("clientId") || request.headers.get("x-client-id") || undefined;
+    const showAll = searchParams.get("all") === "true";
+
+    const tasks = getDriveMigrationTasks(showAll ? undefined : clientId);
     return NextResponse.json({ tasks });
   } catch (error: any) {
     console.error("获取网盘迁移任务失败:", error);
@@ -27,6 +31,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const {
       name,
+      clientId,
       sourceFolderUrl,
       sourceFolderToken,
       sourceFolderName,
@@ -45,6 +50,7 @@ export async function POST(request: Request) {
 
     const { task, isNew } = createDriveMigrationTask({
       name,
+      clientId: typeof clientId === "string" ? clientId.trim() : undefined,
       sourceFolderUrl: typeof sourceFolderUrl === "string" ? sourceFolderUrl.trim() : undefined,
       sourceFolderToken: typeof sourceFolderToken === "string" ? sourceFolderToken.trim() : undefined,
       sourceFolderName: typeof sourceFolderName === "string" ? sourceFolderName.trim() : undefined,
@@ -68,10 +74,13 @@ export async function POST(request: Request) {
   }
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
   try {
-    clearCompletedDriveMigrationTasks();
-    const tasks = getDriveMigrationTasks();
+    const { searchParams } = new URL(request.url);
+    const clientId = searchParams.get("clientId") || request.headers.get("x-client-id") || undefined;
+
+    clearCompletedDriveMigrationTasks(clientId);
+    const tasks = getDriveMigrationTasks(clientId);
     return NextResponse.json({ success: true, tasks });
   } catch (error: any) {
     console.error("清空网盘迁移任务失败:", error);

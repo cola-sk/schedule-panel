@@ -99,7 +99,7 @@ export function DriveMigrationTasksSheet({
                 )}
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                任务在后台静默运行，迁移完毕后自动刷新主界面状态
+                已开启用户隔离，仅展示当前浏览器发起的迁移任务
               </p>
             </div>
           </div>

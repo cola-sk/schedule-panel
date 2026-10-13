@@ -247,16 +247,16 @@ export function KnowledgeMigrationNotifyDialog({
             </div>
           ) : (
             <div className="mt-4 space-y-4 text-sm">
-              {/* 每日 23:55 静默巡检扫描开关 */}
+              {/* 每日 23:50 静默巡检扫描开关 */}
               <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/40 dark:border-indigo-900/50 dark:bg-indigo-950/20 p-3.5 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <div className="font-medium text-foreground flex items-center gap-1.5">
                       <Moon className="size-4 text-indigo-500" />
-                      <span>每日 23:55 静默巡检扫描</span>
+                      <span>每日 23:50 静默巡检扫描</span>
                       {config.silentDailyScanEnabled !== false ? (
                         <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-[10px]">
-                          已开启 (每晚 23:55)
+                          已开启 (每晚 23:50)
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="bg-muted text-muted-foreground text-[10px]">
@@ -265,7 +265,7 @@ export function KnowledgeMigrationNotifyDialog({
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      每天 23:55 自动扫描知识库，将当天新移入的文档锁定入库时间并更新周度贡献榜。
+                      每天 23:50 自动扫描知识库，将当天新移入的文档锁定入库时间并更新周度贡献榜。
                     </p>
                   </div>
                   <input

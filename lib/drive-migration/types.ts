@@ -118,6 +118,7 @@ export interface MigrationTaskItemDetail {
 export interface DriveMigrationTask {
   id: string;
   name: string;
+  clientId?: string;
   sourceFolderUrl?: string;
   sourceFolderToken?: string;
   sourceFolderName?: string;

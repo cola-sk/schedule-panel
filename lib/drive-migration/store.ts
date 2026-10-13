@@ -70,8 +70,10 @@ function persist(store: DriveMigrationStore) {
   }
 }
 
-export function getDriveMigrationTasks(): DriveMigrationTask[] {
-  return loadStore().tasks;
+export function getDriveMigrationTasks(clientId?: string): DriveMigrationTask[] {
+  const tasks = loadStore().tasks;
+  if (!clientId) return tasks;
+  return tasks.filter((t) => t.clientId === clientId);
 }
 
 export function getDriveMigrationTask(id: string): DriveMigrationTask | undefined {
@@ -80,6 +82,7 @@ export function getDriveMigrationTask(id: string): DriveMigrationTask | undefine
 
 export function createDriveMigrationTask(input: {
   name?: string;
+  clientId?: string;
   sourceFolderUrl?: string;
   sourceFolderToken?: string;
   sourceFolderName?: string;
@@ -133,6 +136,7 @@ export function createDriveMigrationTask(input: {
   const task: DriveMigrationTask = {
     id,
     name: input.name || `迁移任务 (${input.items.length} 篇文档)`,
+    clientId: input.clientId,
     sourceFolderUrl: input.sourceFolderUrl,
     sourceFolderToken: input.sourceFolderToken,
     sourceFolderName: input.sourceFolderName,
@@ -190,9 +194,18 @@ export function updateDriveMigrationTaskItem(
   persist(store);
 }
 
-export function clearCompletedDriveMigrationTasks(): void {
+export function clearCompletedDriveMigrationTasks(clientId?: string): void {
   const store = loadStore();
-  store.tasks = store.tasks.filter((t) => t.status === "running" || t.status === "pending");
+  store.tasks = store.tasks.filter((t) => {
+    // 正在运行或排队中的任务始终保留
+    if (t.status === "running" || t.status === "pending") return true;
+    // 如果指定了 clientId，只清理该用户的已完成任务，保留其他人的
+    if (clientId) {
+      return t.clientId !== clientId;
+    }
+    // 未指定 clientId 时清理所有已完成任务
+    return false;
+  });
   persist(store);
 }
 

@@ -18,6 +18,7 @@ import {
   Database,
   File,
   HelpCircle,
+  Info,
   CheckSquare,
   Square,
   RefreshCw,
@@ -50,6 +51,17 @@ const STORAGE_KEY_ITEM_STATES = "feishu_drive_migration_item_states";
 const STORAGE_KEY_ITEM_TARGETS = "feishu_drive_migration_item_targets";
 const STORAGE_KEY_SELECTED = "feishu_drive_migration_selected";
 const STORAGE_KEY_SELECTED_ID = "feishu_drive_migration_selected_id";
+const STORAGE_KEY_CLIENT_ID = "feishu_drive_migration_client_id";
+
+function getClientId(): string {
+  if (typeof window === "undefined") return "";
+  let id = localStorage.getItem(STORAGE_KEY_CLIENT_ID);
+  if (!id) {
+    id = `usr_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    localStorage.setItem(STORAGE_KEY_CLIENT_ID, id);
+  }
+  return id;
+}
 
 const inputControlClass =
   "h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:border-foreground/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -818,7 +830,8 @@ export function DriveMigrationDashboard() {
   const fetchTasks = useCallback(async () => {
     try {
       setTasksLoading(true);
-      const res = await fetch("/api/drive-migration/tasks");
+      const clientId = getClientId();
+      const res = await fetch(`/api/drive-migration/tasks?clientId=${encodeURIComponent(clientId)}`);
       if (!res.ok) return;
       const data = await res.json();
       if (!Array.isArray(data.tasks)) return;
@@ -985,7 +998,8 @@ export function DriveMigrationDashboard() {
   // 清空已完成任务历史
   async function handleClearCompletedTasks() {
     try {
-      await fetch("/api/drive-migration/tasks", { method: "DELETE" });
+      const clientId = getClientId();
+      await fetch(`/api/drive-migration/tasks?clientId=${encodeURIComponent(clientId)}`, { method: "DELETE" });
       await fetchTasks();
       showToast("已清空已完成的历史迁移任务");
     } catch {}
@@ -1347,6 +1361,7 @@ export function DriveMigrationDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          clientId: getClientId(),
           name: `迁移「${file.name}」`,
           sourceFolderUrl: folderUrl.trim(),
           sourceFolderToken: scanResult?.folderInfo?.token,
@@ -1435,6 +1450,7 @@ export function DriveMigrationDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          clientId: getClientId(),
           name: `迁移目录「${node.name}」 (${payloadItems.length} 篇)`,
           sourceFolderUrl: folderUrl.trim(),
           sourceFolderToken: scanResult?.folderInfo?.token,
@@ -1597,6 +1613,7 @@ export function DriveMigrationDashboard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          clientId: getClientId(),
           name: `批量迁移文档 (${payloadItems.length} 篇)`,
           sourceFolderUrl: folderUrl.trim(),
           sourceFolderToken: scanResult?.folderInfo?.token,
@@ -1704,6 +1721,15 @@ export function DriveMigrationDashboard() {
         </div>
       </div>
 
+      {/* 本地缓存提示条 */}
+      <div className="mb-6 flex items-start gap-2.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-300">
+        <Info className="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+        <div className="leading-relaxed">
+          <span className="font-medium">温馨提示：</span>
+          网盘扫描与迁移记录仅保存在当前浏览器的本地缓存中。若更换浏览器、切换访问域名、使用无痕模式或清理浏览器缓存，历史记录将会消失（可随时重新扫描重新获取）。
+        </div>
+      </div>
+
       {/* 授权与操作指南卡片 */}
       {showHelp && (
         <Card className="mb-8 border-border bg-secondary/30">
@@ -1726,6 +1752,9 @@ export function DriveMigrationDashboard() {
             <p>
               3. <strong className="text-foreground">目录与单文件级操作</strong>：支持一键对当前目录进行
               <strong>「迁移当前目录」</strong>或<strong>「忽略当前目录」</strong>；每篇文档右侧也可独立通过级联下拉框选择各自目标路径。
+            </p>
+            <p>
+              4. <strong className="text-foreground">本地缓存说明</strong>：个人网盘的扫描清单、目标路径配置与状态覆盖映射仅保存在当前浏览器的本地缓存（LocalStorage）中，更换浏览器、切换访问域名或清理缓存后将清空，随时可通过重新扫描恢复。
             </p>
           </CardContent>
         </Card>

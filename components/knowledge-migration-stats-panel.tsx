@@ -271,10 +271,10 @@ export function KnowledgeMigrationStatsPanel({
                     ? "bg-indigo-50/80 border-indigo-200 text-indigo-700 hover:bg-indigo-100/80 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300"
                     : "bg-muted/40 border-border text-muted-foreground hover:bg-muted/80"
                 }`}
-                title="点击配置每日 23:55 静默巡检扫描"
+                title="点击配置每日 23:50 静默巡检扫描"
               >
                 <Moon className="size-3.5" />
-                <span>每日23:55静默巡检: {notifySchedule?.silentDailyScanEnabled !== false ? "已开启" : "已停用"}</span>
+                <span>每日23:50静默巡检: {notifySchedule?.silentDailyScanEnabled !== false ? "已开启" : "已停用"}</span>
               </button>
               <Button
                 size="sm"
@@ -318,7 +318,7 @@ export function KnowledgeMigrationStatsPanel({
                 {notifySchedule.silentDailyScanEnabled !== false && (
                   <span className="inline-flex items-center gap-1 text-indigo-700 dark:text-indigo-300 ml-auto font-medium">
                     <Moon className="size-3" />
-                    每晚 23:55 静默巡检
+                    每晚 23:50 静默巡检
                   </span>
                 )}
               </div>
@@ -329,7 +329,7 @@ export function KnowledgeMigrationStatsPanel({
                 <div className="flex items-center gap-2">
                   <Moon className="size-3.5 text-indigo-500" />
                   <span>
-                    <strong>每日 23:55 静默巡检已开启</strong>：系统每晚自动全量巡检知识库并锁定入库时间，不向任何群发送通知。
+                    <strong>每日 23:50 静默巡检已开启</strong>：系统每晚自动全量巡检知识库并锁定入库时间，不向任何群发送通知。
                   </span>
                 </div>
                 <button
