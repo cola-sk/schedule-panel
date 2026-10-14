@@ -92,8 +92,6 @@ async function ensureTableFields(appToken: string, tableId: string) {
   if (!primary?.field_name) throw new Error("目标数据表缺少主字段");
 
   const expectedFields: Array<{ name: string; type: number }> = [
-    { name: "类别", type: 1 },
-    { name: "开会日期", type: 1 },
     { name: "会议名称", type: 1 },
     { name: "责任人", type: 1 },
     { name: "风险等级", type: 1 },
@@ -209,8 +207,6 @@ export async function exportMeetingActions(
     for (const item of meeting.decisions) {
       rawRecords.push({
         [primaryField]: conciseText(item.title, 50),
-        类别: "结论",
-        开会日期: meetingDateStr,
         会议名称: conciseText(meeting.title, 40),
         责任人: "",
         风险等级: "",
@@ -231,8 +227,6 @@ export async function exportMeetingActions(
       const owner = item.who.name || "未指定";
       rawRecords.push({
         [primaryField]: conciseText(item.what, 60),
-        类别: "TODO",
-        开会日期: meetingDateStr,
         会议名称: conciseText(meeting.title, 40),
         责任人: owner,
         风险等级: "",
@@ -252,8 +246,6 @@ export async function exportMeetingActions(
     for (const item of meeting.risks) {
       rawRecords.push({
         [primaryField]: conciseText(item.title, 50),
-        类别: "风险",
-        开会日期: meetingDateStr,
         会议名称: conciseText(meeting.title, 40),
         责任人: item.owner || "未指定",
         风险等级: riskLevelLabels[item.level] || item.level,

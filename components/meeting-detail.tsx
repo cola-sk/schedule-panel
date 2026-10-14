@@ -688,7 +688,7 @@ export function MeetingDetail({
                       <div>
                         <h3 className="font-semibold text-[#294675]">输出到飞书多维表格</h3>
                         <p className="mt-1 text-xs leading-5 text-[#667d9f]">
-                          按照结论、TODO、风险结构化输出，包含开会日期。
+                          按照结论、TODO、风险结构化输出，表格已精炼优化。
                         </p>
                       </div>
                     </div>
@@ -1121,8 +1121,7 @@ export function MeetingDetail({
               <div>
                 <h2 className="text-lg font-semibold">导出到飞书多维表格</h2>
                 <p className="mt-1 text-sm text-[#798597]">
-                  按结论、TODO、风险的方式格式化输出，并附带开会日期（
-                  {formatDate(meeting.meetingDate || meeting.createdAt)}）。
+                  精简格式化输出结论、TODO、风险等核心项（已去除会议类别与日期列）。
                 </p>
               </div>
               <button
@@ -1190,7 +1189,7 @@ export function MeetingDetail({
                       <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">推荐</span>
                     </div>
                     <p className="mt-0.5 text-[11px] text-[#718096] leading-relaxed">
-                      集中沉淀在同一表中，带「开会日期」字段，方便多维表格视图分组与后续<strong>跨多次会议风险评估</strong>。
+                      集中沉淀在同一汇总表中，方便团队统一追踪与后续<strong>跨多次会议风险评估</strong>。
                     </p>
                   </div>
                 </label>
