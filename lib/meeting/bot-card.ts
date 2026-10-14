@@ -35,7 +35,7 @@ export function buildMeetingTextMessage(
     ? meeting.meetingDate.slice(0, 10)
     : formatDate(meeting.createdAt);
 
-  const defaultText = `各位同学，${meetingDateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接查阅详情与最新进展：`;
+  const defaultText = `各位同学，${meetingDateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
   const textBody = options?.customText?.trim() || defaultText;
 
   // 纯文本消息：附带多维表格文档链接（若用户文案中未包含，则换行附带）
@@ -68,7 +68,7 @@ export function buildMeetingInteractiveCard(
     ? meeting.meetingDate.slice(0, 10)
     : formatDate(meeting.createdAt);
 
-  const defaultIntro = `各位同学，${meetingDateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接即可查阅详情与最新进展。`;
+  const defaultIntro = `各位同学，${meetingDateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
   const textDescription = options?.introText?.trim() || defaultIntro;
 
   const elements: any[] = [];

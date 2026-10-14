@@ -187,8 +187,13 @@ export function MeetingDetail({
     if (!botTableName) setBotTableName(initialTableName);
 
     const dateStr = meeting.meetingDate ? meeting.meetingDate.slice(0, 10) : formatDate(meeting.createdAt);
-    const defaultIntro = `各位同学，${dateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接查阅详情与最新进展：`;
-    if (!botIntroText || botIntroText.includes("请各事项负责人关注相关风险") || botIntroText.includes("点击下方表格链接即可查阅详情与最新进展。")) {
+    const defaultIntro = `各位同学，${dateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
+    if (
+      !botIntroText ||
+      botIntroText.includes("已汇总更新至飞书多维表格") ||
+      botIntroText.includes("请各事项负责人关注相关风险") ||
+      botIntroText.includes("点击下方表格链接即可查阅详情与最新进展")
+    ) {
       setBotIntroText(defaultIntro);
     }
 
@@ -938,7 +943,7 @@ export function MeetingDetail({
                         type="button"
                         onClick={() => {
                           const dateStr = meeting.meetingDate ? meeting.meetingDate.slice(0, 10) : formatDate(meeting.createdAt);
-                          setBotIntroText(`各位同学，${dateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接查阅详情与最新进展：`);
+                          setBotIntroText(`各位同学，${dateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`);
                         }}
                         className="text-[11px] text-[#3370ff] hover:underline"
                       >
