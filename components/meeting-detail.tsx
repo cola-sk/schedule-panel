@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import {
@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BadgeCheck,
+  Bot,
   Calendar,
   CalendarDays,
   Check,
@@ -16,12 +17,14 @@ import {
   CircleAlert,
   Clock3,
   ExternalLink,
+  Eye,
   FileEdit,
   FileText,
   History,
   ListTodo,
   LoaderCircle,
   Mail,
+  MessageSquare,
   MessageSquareQuote,
   Pencil,
   Save,
@@ -81,7 +84,7 @@ export function MeetingDetail({
   const [dateDraft, setDateDraft] = useState(meeting.meetingDate ? meeting.meetingDate.slice(0, 10) : "");
   const [savingDate, setSavingDate] = useState(false);
 
-  // 导出相关状态
+  // 导出到多维表格状态
   const [exportOpen, setExportOpen] = useState(false);
   const [targetUrl, setTargetUrl] = useState(DEFAULT_FEISHU_BITABLE_URL);
   const [includeDecisions, setIncludeDecisions] = useState(true);
@@ -91,6 +94,21 @@ export function MeetingDetail({
   const [retrying, setRetrying] = useState(false);
   const [exportError, setExportError] = useState("");
   const [notice, setNotice] = useState("");
+
+  // 机器人卡片预览与发送状态
+  const [botModalOpen, setBotModalOpen] = useState(false);
+  const [availableBots, setAvailableBots] = useState<
+    Array<{ id: string; name: string; configured: boolean; webhookMasked: string }>
+  >([]);
+  const [selectedBotId, setSelectedBotId] = useState("");
+  const [useCustomWebhook, setUseCustomWebhook] = useState(false);
+  const [customWebhookUrl, setCustomWebhookUrl] = useState("");
+  const [botIntroText, setBotIntroText] = useState("请各事项负责人关注相关风险，按时推进会后行动项闭环！");
+  const [botIncludeDecisions, setBotIncludeDecisions] = useState(true);
+  const [botIncludeActions, setBotIncludeActions] = useState(true);
+  const [botIncludeRisks, setBotIncludeRisks] = useState(true);
+  const [sendingBot, setSendingBot] = useState(false);
+  const [sendBotError, setSendBotError] = useState("");
 
   const scenario = meeting.scenario || "meeting_action";
   const unfinishedPrevious = previousMeeting?.actionItems?.filter((item) => item.status !== "completed") ?? [];
@@ -107,6 +125,60 @@ export function MeetingDetail({
       else next.add(id);
       return next;
     });
+  }
+
+  async function openBotModal() {
+    setBotModalOpen(true);
+    setSendBotError("");
+    try {
+      const res = await fetch("/api/bots");
+      const data = await res.json();
+      if (Array.isArray(data.bots)) {
+        const configured = data.bots.filter((b: any) => b.configured);
+        setAvailableBots(configured);
+        if (configured.length > 0 && !selectedBotId) {
+          setSelectedBotId(configured[0].id);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  async function handleSendToBot(event: React.FormEvent) {
+    event.preventDefault();
+    setSendingBot(true);
+    setSendBotError("");
+    try {
+      const payload: Record<string, unknown> = {
+        introText: botIntroText,
+        includeDecisions: botIncludeDecisions,
+        includeActionItems: botIncludeActions,
+        includeRisks: botIncludeRisks,
+      };
+      if (useCustomWebhook) {
+        if (!customWebhookUrl.trim()) throw new Error("请输入自定义 Webhook 地址");
+        payload.customWebhook = customWebhookUrl.trim();
+      } else {
+        if (!selectedBotId) throw new Error("请选择要发送的机器人");
+        payload.botId = selectedBotId;
+      }
+
+      const res = await fetch(`/api/meetings/${meeting.id}/send-bot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "机器人发送失败");
+      setBotModalOpen(false);
+      setNotice(`✅ 已成功将卡片推送至「${data.botName}」所在群聊！`);
+      window.setTimeout(() => setNotice(""), 3500);
+    } catch (err: any) {
+      setSendBotError(err.message || "发送失败");
+    } finally {
+      setSendingBot(false);
+    }
   }
 
   async function saveMeetingDate() {
@@ -220,13 +292,22 @@ export function MeetingDetail({
                 </p>
               </div>
             </div>
-            <button
-              disabled={meeting.status !== "completed"}
-              onClick={() => setExportOpen(true)}
-              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-[#3370ff] px-3.5 text-sm font-medium text-white shadow-sm hover:bg-[#2864ed] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Table2 size={16} /> 导出到多维表格
-            </button>
+            <div className="flex items-center gap-2.5">
+              <button
+                disabled={meeting.status !== "completed"}
+                onClick={openBotModal}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg border border-[#3370ff]/40 bg-[#f4f7fe] px-3.5 text-sm font-medium text-[#3370ff] hover:bg-[#ebf2fe] disabled:cursor-not-allowed disabled:opacity-50 transition"
+              >
+                <Bot size={16} /> 预览并发送到群
+              </button>
+              <button
+                disabled={meeting.status !== "completed"}
+                onClick={() => setExportOpen(true)}
+                className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-[#3370ff] px-3.5 text-sm font-medium text-white shadow-sm hover:bg-[#2864ed] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Table2 size={16} /> 导出到多维表格
+              </button>
+            </div>
           </div>
         </header>
 
@@ -469,8 +550,29 @@ export function MeetingDetail({
                   )}
                 </div>
 
-                {/* 右侧栏：风险、多维表格导出与跨会议追踪 */}
+                {/* 右侧栏：群播报、风险、多维表格导出与跨会议追踪 */}
                 <aside className="space-y-5">
+                  {/* 快速群通知卡片 */}
+                  <section className="rounded-xl border border-[#dce6fb] bg-[#f8faff] p-5">
+                    <div className="flex items-start gap-3">
+                      <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-[#3370ff] text-white">
+                        <Bot size={18} />
+                      </span>
+                      <div>
+                        <h3 className="font-semibold text-[#294675]">群内机器人播报</h3>
+                        <p className="mt-1 text-xs leading-5 text-[#667d9f]">
+                          支持预览卡片效果，手动选择机器人一键推送到群。
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={openBotModal}
+                      className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#3370ff] py-2.5 text-sm font-medium text-white hover:bg-[#2864ed]"
+                    >
+                      <Eye size={15} /> 预览卡片并发送
+                    </button>
+                  </section>
+
                   {/* 风险模块 */}
                   <RiskSection
                     items={meeting.risks ?? []}
@@ -591,6 +693,319 @@ export function MeetingDetail({
           )}
         </div>
       </main>
+
+      {/* 机器人卡片预览与发送模态弹窗 */}
+      {botModalOpen && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-[#172033]/45 p-4 backdrop-blur-[2px] overflow-y-auto"
+          onMouseDown={(event) => event.target === event.currentTarget && !sendingBot && setBotModalOpen(false)}
+        >
+          <div className="w-full max-w-4xl my-6 rounded-2xl bg-white p-6 shadow-2xl border border-white/60">
+            <div className="flex items-start justify-between pb-4 border-b border-[#edf0f4]">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-9 place-items-center rounded-xl bg-blue-50 text-[#3370ff]">
+                  <Bot size={20} />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold tracking-[-0.025em]">群通知卡片预览与手动发送</h2>
+                  <p className="mt-0.5 text-xs text-[#7c8798]">
+                    预览将在飞书群内呈现的完整富交互卡片，支持勾选内容与选择目标群机器人
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={sendingBot}
+                onClick={() => setBotModalOpen(false)}
+                className="grid size-8 place-items-center rounded-lg text-[#7c8797] hover:bg-[#f3f5f7]"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
+              {/* 左侧：真实的飞书卡片样式预览 */}
+              <div>
+                <p className="text-xs font-semibold text-[#546274] mb-2 flex items-center gap-1.5">
+                  <Eye size={14} className="text-[#3370ff]" /> 飞书群卡片效果预览 (Live Preview)
+                </p>
+                <div className="rounded-xl border border-[#d8e0ed] bg-[#f5f6f8] p-4 shadow-inner">
+                  {/* 模拟飞书聊天气泡 */}
+                  <div className="max-w-md mx-auto rounded-lg border border-[#dee3ea] bg-white shadow-sm overflow-hidden text-xs text-[#1f2735]">
+                    {/* 卡片彩色 Header */}
+                    <div
+                      className={`px-4 py-3 text-white font-medium flex items-center justify-between ${
+                        botIncludeRisks && meeting.risks?.some((r) => r.level === "high")
+                          ? "bg-gradient-to-r from-amber-600 to-orange-500"
+                          : "bg-gradient-to-r from-[#3370ff] to-[#2859c7]"
+                      }`}
+                    >
+                      <span className="font-semibold text-sm truncate">📋 会议行动闭环 · {meeting.title}</span>
+                      <span className="text-[10px] opacity-80 shrink-0">群通知卡片</span>
+                    </div>
+
+                    <div className="p-4 space-y-3">
+                      {/* 播报前言 */}
+                      {botIntroText.trim() && (
+                        <div className="rounded-md bg-[#edf3ff] p-2 text-[#35528c] font-medium leading-relaxed">
+                          {botIntroText.trim()}
+                        </div>
+                      )}
+
+                      {/* 元信息分栏 */}
+                      <div className="grid grid-cols-2 gap-2 text-[11px] bg-[#f9fafc] p-2.5 rounded-lg border border-[#edf0f4]">
+                        <div>
+                          <span className="text-[#8492a6]">📅 开会日期：</span>
+                          <span className="font-semibold text-[#293444] block">
+                            {formatDate(meeting.meetingDate || meeting.createdAt)}
+                          </span>
+                        </div>
+                        {meeting.seriesName && (
+                          <div>
+                            <span className="text-[#8492a6]">🏷️ 会议系列：</span>
+                            <span className="font-medium text-[#293444] block truncate">{meeting.seriesName}</span>
+                          </div>
+                        )}
+                        {meeting.participants?.length > 0 && (
+                          <div className="col-span-2 mt-1">
+                            <span className="text-[#8492a6]">👥 参会人：</span>
+                            <span className="text-[#293444]">{meeting.participants.join("、")}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 摘要 */}
+                      {meeting.summary && (
+                        <div className="leading-relaxed text-[#4b5869]">
+                          <strong className="text-[#252f3d]">📝 会议总结：</strong>
+                          <p className="mt-0.5 line-clamp-3">{meeting.summary}</p>
+                        </div>
+                      )}
+
+                      {/* 结论预览 */}
+                      {botIncludeDecisions && (meeting.decisions?.length || 0) > 0 && (
+                        <div className="border-t border-[#edf0f4] pt-2">
+                          <p className="font-semibold text-emerald-700 flex items-center gap-1">
+                            <BadgeCheck size={13} /> 核心结论 ({meeting.decisions.length})
+                          </p>
+                          <div className="mt-1 space-y-1.5 pl-1">
+                            {meeting.decisions.slice(0, 3).map((d, i) => (
+                              <div key={d.id} className="text-[#3b4758]">
+                                <span className="font-medium text-[#202735]">
+                                  {i + 1}. {d.title}
+                                </span>
+                                <span className="text-[#6d798a] block text-[11px] line-clamp-1">{d.detail}</span>
+                              </div>
+                            ))}
+                            {meeting.decisions.length > 3 && (
+                              <p className="text-[10px] text-[#8a95a5]">… 等共 {meeting.decisions.length} 条决议</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* TODO 预览 */}
+                      {botIncludeActions && (meeting.actionItems?.length || 0) > 0 && (
+                        <div className="border-t border-[#edf0f4] pt-2">
+                          <p className="font-semibold text-[#3370ff] flex items-center gap-1">
+                            <ListTodo size={13} /> 行动项 TODO ({meeting.actionItems.length})
+                          </p>
+                          <div className="mt-1 space-y-1 pl-1">
+                            {meeting.actionItems.slice(0, 3).map((act, i) => (
+                              <div key={act.id} className="text-[#3b4758]">
+                                <span className="font-medium text-[#202735]">
+                                  {i + 1}. {act.who.name}
+                                </span>
+                                ：{act.what}
+                                {act.dueAt && <span className="text-amber-600"> (截止 {act.dueAt.slice(0, 10)})</span>}
+                              </div>
+                            ))}
+                            {meeting.actionItems.length > 3 && (
+                              <p className="text-[10px] text-[#8a95a5]">… 等共 {meeting.actionItems.length} 条待办</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 风险预览 */}
+                      {botIncludeRisks && (meeting.risks?.length || 0) > 0 && (
+                        <div className="border-t border-[#edf0f4] pt-2">
+                          <p className="font-semibold text-amber-700 flex items-center gap-1">
+                            <TriangleAlert size={13} /> 潜在风险 ({meeting.risks.length})
+                          </p>
+                          <div className="mt-1 space-y-1 pl-1">
+                            {meeting.risks.map((r, i) => (
+                              <div key={r.id} className="text-[#3b4758]">
+                                <span
+                                  className={`font-semibold ${
+                                    r.level === "high"
+                                      ? "text-red-600"
+                                      : r.level === "medium"
+                                      ? "text-amber-600"
+                                      : "text-slate-600"
+                                  }`}
+                                >
+                                  {r.level === "high" ? "🔴" : "🟡"} [{r.level === "high" ? "高危" : "中度"}]{" "}
+                                </span>
+                                <span className="font-medium">{r.title}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 底部按钮预览 */}
+                      <div className="border-t border-[#edf0f4] pt-2 flex gap-2">
+                        <span className="flex-1 text-center py-1.5 rounded bg-[#3370ff] text-white font-medium text-[11px]">
+                          查看飞书文档
+                        </span>
+                        <span className="flex-1 text-center py-1.5 rounded bg-[#edf1f7] text-[#4d5968] font-medium text-[11px]">
+                          查看多维表格
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 右侧：播报参数设置与机器人选择 */}
+              <form onSubmit={handleSendToBot} className="flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-[#485566] mb-1.5">
+                      播报前言 / 群内附言
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={botIntroText}
+                      onChange={(e) => setBotIntroText(e.target.value)}
+                      placeholder="可在卡片开头附带 @全体 或关键提醒..."
+                      className="w-full rounded-lg border border-[#dce2ea] p-2.5 text-xs outline-none focus:border-[#6e96f4] resize-none leading-relaxed"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-[#485566] mb-1.5">
+                      选择包含内容模块
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <label className="flex items-center gap-1.5 text-xs text-[#2c3645] bg-[#f8fafc] p-2 rounded-lg border border-[#e4e9f0] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={botIncludeDecisions}
+                          onChange={(e) => setBotIncludeDecisions(e.target.checked)}
+                          className="rounded text-[#3370ff]"
+                        />
+                        <span>结论 ({meeting.decisions?.length || 0})</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs text-[#2c3645] bg-[#f8fafc] p-2 rounded-lg border border-[#e4e9f0] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={botIncludeActions}
+                          onChange={(e) => setBotIncludeActions(e.target.checked)}
+                          className="rounded text-[#3370ff]"
+                        />
+                        <span>TODO ({meeting.actionItems?.length || 0})</span>
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs text-[#2c3645] bg-[#f8fafc] p-2 rounded-lg border border-[#e4e9f0] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={botIncludeRisks}
+                          onChange={(e) => setBotIncludeRisks(e.target.checked)}
+                          className="rounded text-[#3370ff]"
+                        />
+                        <span>风险 ({meeting.risks?.length || 0})</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 机器人选择 */}
+                  <div className="rounded-xl border border-[#e0e7f3] bg-[#f8faff] p-3.5 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#2a3c5a] flex items-center gap-1.5">
+                        <Bot size={14} className="text-[#3370ff]" /> 选择推送机器人
+                      </span>
+                      <label className="flex items-center gap-1 text-[11px] text-[#556988] cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={useCustomWebhook}
+                          onChange={(e) => setUseCustomWebhook(e.target.checked)}
+                          className="rounded text-[#3370ff]"
+                        />
+                        <span>自定义 Webhook</span>
+                      </label>
+                    </div>
+
+                    {!useCustomWebhook ? (
+                      <div>
+                        {availableBots.length > 0 ? (
+                          <select
+                            value={selectedBotId}
+                            onChange={(e) => setSelectedBotId(e.target.value)}
+                            className="h-10 w-full rounded-lg border border-[#d6dfea] bg-white px-3 text-xs outline-none focus:border-[#3370ff]"
+                          >
+                            {availableBots.map((bot) => (
+                              <option key={bot.id} value={bot.id}>
+                                🤖 {bot.name} ({bot.webhookMasked})
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <div className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                            系统尚未配置可用机器人，请勾选“自定义 Webhook”输入地址。
+                          </div>
+                        )}
+                        <p className="mt-1 text-[11px] text-[#7a8da3]">
+                          将把卡片直接推送到该机器人所在的飞书群聊。
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <input
+                          type="url"
+                          required={useCustomWebhook}
+                          value={customWebhookUrl}
+                          onChange={(e) => setCustomWebhookUrl(e.target.value)}
+                          placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/..."
+                          className="h-10 w-full rounded-lg border border-[#d6dfea] bg-white px-3 text-xs outline-none focus:border-[#3370ff]"
+                        />
+                        <p className="mt-1 text-[11px] text-[#7a8da3]">
+                          可从飞书群聊设置 &gt; 群机器人 &gt; 添加自定义机器人获取 Webhook。
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {sendBotError && (
+                    <div className="flex gap-2 rounded-lg bg-red-50 p-2.5 text-xs text-red-700">
+                      <CircleAlert size={15} className="mt-0.5 shrink-0" />
+                      <div>{sendBotError}</div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-6 flex justify-end gap-2 border-t border-[#edf0f4] pt-4">
+                  <button
+                    type="button"
+                    disabled={sendingBot}
+                    onClick={() => setBotModalOpen(false)}
+                    className="h-9 rounded-lg border border-[#dfe4eb] px-4 text-xs font-medium text-[#566273] hover:bg-[#f7f8fa]"
+                  >
+                    取消
+                  </button>
+                  <button
+                    disabled={sendingBot || (!selectedBotId && !customWebhookUrl)}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#3370ff] px-4 text-xs font-medium text-white hover:bg-[#2864ed] disabled:opacity-60 shadow-sm"
+                  >
+                    {sendingBot ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
+                    {sendingBot ? "正在发送至群聊…" : "确认发送到群"}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 导出弹窗 */}
       {exportOpen && (
