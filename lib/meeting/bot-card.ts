@@ -19,6 +19,41 @@ function formatDate(value?: string) {
   return new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "short", day: "numeric" }).format(date);
 }
 
+/**
+ * 构建纯文本群消息（仅包含文字描述与飞书表格文档链接）
+ */
+export function buildMeetingTextMessage(
+  meeting: MeetingAnalysis,
+  options?: {
+    customText?: string;
+    tableUrl?: string;
+  },
+): FeishuMessagePayload {
+  const finalTableUrl =
+    options?.tableUrl?.trim() || meeting.exports?.[0]?.targetUrl || DEFAULT_FEISHU_BITABLE_URL;
+  const meetingDateStr = meeting.meetingDate
+    ? meeting.meetingDate.slice(0, 10)
+    : formatDate(meeting.createdAt);
+
+  const defaultText = `各位同学，${meetingDateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接查阅详情与最新进展：`;
+  const textBody = options?.customText?.trim() || defaultText;
+
+  // 纯文本消息：附带多维表格文档链接（若用户文案中未包含，则换行附带）
+  const contentText = textBody.includes(finalTableUrl)
+    ? textBody
+    : `${textBody}\n${finalTableUrl}`;
+
+  return {
+    msg_type: "text",
+    content: {
+      text: contentText,
+    },
+  };
+}
+
+/**
+ * 备用：构建飞书交互卡片消息
+ */
 export function buildMeetingInteractiveCard(
   meeting: MeetingAnalysis,
   options?: BuildCardOptions,
@@ -38,7 +73,7 @@ export function buildMeetingInteractiveCard(
 
   const elements: any[] = [];
 
-  // 1. 自定义文字描述 (置顶醒目展示)
+  // 1. 自定义文字描述
   elements.push({
     tag: "div",
     text: {
@@ -66,16 +101,6 @@ export function buildMeetingInteractiveCard(
       },
     },
   ];
-
-  if (meeting.sourceUrl) {
-    fields.push({
-      is_short: false,
-      text: {
-        tag: "lark_md",
-        content: `**📄 纪要文档：**\n[${meeting.title}](${meeting.sourceUrl})`,
-      },
-    });
-  }
 
   elements.push({
     tag: "div",
@@ -139,7 +164,7 @@ export function buildMeetingInteractiveCard(
     }
   }
 
-  // 4. 底部跳转按钮
+  // 4. 底部跳转按钮（仅附带多维表格）
   const actionButtons: any[] = [
     {
       tag: "button",
@@ -151,18 +176,6 @@ export function buildMeetingInteractiveCard(
       url: finalTableUrl,
     },
   ];
-
-  if (meeting.sourceUrl) {
-    actionButtons.push({
-      tag: "button",
-      text: {
-        tag: "plain_text",
-        content: "📄 查看会议纪要",
-      },
-      type: "default",
-      url: meeting.sourceUrl,
-    });
-  }
 
   elements.push({ tag: "hr" });
   elements.push({

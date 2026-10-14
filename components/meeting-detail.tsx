@@ -151,8 +151,8 @@ export function MeetingDetail({
     if (!botTableName) setBotTableName(initialTableName);
 
     const dateStr = meeting.meetingDate ? meeting.meetingDate.slice(0, 10) : formatDate(meeting.createdAt);
-    const defaultIntro = `各位同学，${dateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接即可查阅详情与最新进展。`;
-    if (!botIntroText || botIntroText.includes("请各事项负责人关注相关风险")) {
+    const defaultIntro = `各位同学，${dateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接查阅详情与最新进展：`;
+    if (!botIntroText || botIntroText.includes("请各事项负责人关注相关风险") || botIntroText.includes("点击下方表格链接即可查阅详情与最新进展。")) {
       setBotIntroText(defaultIntro);
     }
 
@@ -176,14 +176,16 @@ export function MeetingDetail({
     setSendingBot(true);
     setSendBotError("");
     try {
+      const finalUrl = botTableUrl || DEFAULT_FEISHU_BITABLE_URL;
+      const fullText = botIntroText.trim().includes(finalUrl)
+        ? botIntroText.trim()
+        : `${botIntroText.trim()}\n${finalUrl}`;
+
       const payload: Record<string, unknown> = {
-        introText: botIntroText,
-        tableUrl: botTableUrl || DEFAULT_FEISHU_BITABLE_URL,
+        introText: fullText,
+        tableUrl: finalUrl,
         tableName: botTableName || "会议行动与风险跟踪总表",
-        cardMode: botCardMode,
-        includeDecisions: botCardMode === "full" ? botIncludeDecisions : false,
-        includeActionItems: botCardMode === "full" ? botIncludeActions : false,
-        includeRisks: botCardMode === "full" ? botIncludeRisks : false,
+        msgType: "text",
       };
       if (useCustomWebhook) {
         if (!customWebhookUrl.trim()) throw new Error("请输入自定义 Webhook 地址");
@@ -201,7 +203,7 @@ export function MeetingDetail({
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "机器人发送失败");
       setBotModalOpen(false);
-      setNotice(`✅ 已成功将卡片推送至「${data.botName}」所在群聊！`);
+      setNotice(`✅ 已成功将纯文本消息推送至「${data.botName}」所在群聊！`);
       window.setTimeout(() => setNotice(""), 3500);
     } catch (err: any) {
       setSendBotError(err.message || "发送失败");
@@ -735,12 +737,12 @@ export function MeetingDetail({
             <div className="flex items-start justify-between pb-4 border-b border-[#edf0f4]">
               <div className="flex items-center gap-2.5">
                 <span className="grid size-9 place-items-center rounded-xl bg-blue-50 text-[#3370ff]">
-                  <Bot size={20} />
+                  <MessageSquare size={19} />
                 </span>
                 <div>
-                  <h2 className="text-lg font-semibold tracking-[-0.025em]">群通知卡片预览与手动发送</h2>
+                  <h2 className="text-lg font-semibold tracking-[-0.025em]">发送纯文本通知到飞书群</h2>
                   <p className="mt-0.5 text-xs text-[#7c8798]">
-                    预览将在飞书群内呈现的完整富交互卡片，支持勾选内容与选择目标群机器人
+                    采用纯文本形式发送至群聊，不使用卡片，仅附带多维表格文档链接
                   </p>
                 </div>
               </div>
@@ -754,139 +756,44 @@ export function MeetingDetail({
               </button>
             </div>
 
-            <div className="mt-5 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
-              {/* 左侧：真实的飞书卡片样式预览 */}
+            <div className="mt-5 grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+              {/* 左侧：飞书群聊纯文本消息真实预览 */}
               <div>
                 <p className="text-xs font-semibold text-[#546274] mb-2 flex items-center gap-1.5">
-                  <Eye size={14} className="text-[#3370ff]" /> 飞书群卡片效果预览 (Live Preview)
+                  <Eye size={14} className="text-[#3370ff]" /> 飞书群纯文本消息预览 (Live Preview)
                 </p>
-                <div className="rounded-xl border border-[#d8e0ed] bg-[#f5f6f8] p-4 shadow-inner">
+                <div className="rounded-xl border border-[#d8e0ed] bg-[#f0f4f9] p-5 shadow-inner min-h-[300px]">
                   {/* 模拟飞书聊天气泡 */}
-                  <div className="max-w-md mx-auto rounded-lg border border-[#dee3ea] bg-white shadow-sm overflow-hidden text-xs text-[#1f2735]">
-                    {/* 卡片彩色 Header */}
-                    <div className="bg-gradient-to-r from-[#3370ff] to-[#2859c7] px-4 py-3 text-white font-medium flex items-center justify-between">
-                      <span className="font-semibold text-sm truncate">📋 会议结论已同步 · {meeting.title}</span>
-                      <span className="text-[10px] opacity-80 shrink-0">飞书群卡片</span>
+                  <div className="flex items-start gap-3">
+                    <div className="size-9 rounded-full bg-[#3370ff] text-white grid place-items-center shrink-0 text-sm font-semibold shadow-sm">
+                      🤖
                     </div>
-
-                    <div className="p-4 space-y-3">
-                      {/* 自定义文字描述 (置顶展示) */}
-                      {botIntroText.trim() && (
-                        <div className="rounded-md bg-[#edf3ff] p-2.5 text-[#2b4c8a] font-medium leading-relaxed whitespace-pre-wrap">
-                          {botIntroText.trim()}
-                        </div>
-                      )}
-
-                      {/* 结论对应的飞书表格与元信息分栏 */}
-                      <div className="grid grid-cols-2 gap-2 text-[11px] bg-[#f9fafc] p-2.5 rounded-lg border border-[#edf0f4]">
-                        <div>
-                          <span className="text-[#8492a6]">📅 开会日期：</span>
-                          <span className="font-semibold text-[#293444] block">
-                            {formatDate(meeting.meetingDate || meeting.createdAt)}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[#8492a6]">📊 飞书表格：</span>
-                          <span className="font-medium text-[#3370ff] block truncate" title={botTableUrl}>
-                            {botTableName || "会议行动与风险跟踪总表"}
-                          </span>
-                        </div>
-                        {meeting.sourceUrl && (
-                          <div className="col-span-2 mt-1 border-t border-[#edf0f4] pt-1">
-                            <span className="text-[#8492a6]">📄 纪要文档：</span>
-                            <span className="text-[#293444] block truncate">{meeting.title}</span>
-                          </div>
-                        )}
+                    <div className="flex-1 space-y-1.5">
+                      <div className="flex items-center gap-1.5 text-xs text-[#64748b]">
+                        <span className="font-semibold text-[#1e293b]">
+                          {useCustomWebhook
+                            ? "自定义机器人"
+                            : availableBots.find((b) => b.id === selectedBotId)?.name || "飞书群机器人"}
+                        </span>
+                        <span className="rounded bg-[#e2e8f0] px-1 py-0.2 text-[10px] text-[#475569]">机器人</span>
+                        <span className="text-[11px] text-[#94a3b8]">刚刚</span>
                       </div>
 
-                      {/* 展开模式下的详细列表 (仅在 full 模式开启) */}
-                      {botCardMode === "full" && (
-                        <>
-                          {botIncludeDecisions && (meeting.decisions?.length || 0) > 0 && (
-                            <div className="border-t border-[#edf0f4] pt-2">
-                              <p className="font-semibold text-emerald-700 flex items-center gap-1">
-                                <BadgeCheck size={13} /> 核心结论 ({meeting.decisions.length})
-                              </p>
-                              <div className="mt-1 space-y-1.5 pl-1">
-                                {meeting.decisions.slice(0, 3).map((d, i) => (
-                                  <div key={d.id} className="text-[#3b4758]">
-                                    <span className="font-medium text-[#202735]">
-                                      {i + 1}. {d.title}
-                                    </span>
-                                    <span className="text-[#6d798a] block text-[11px] line-clamp-1">{d.detail}</span>
-                                  </div>
-                                ))}
-                                {meeting.decisions.length > 3 && (
-                                  <p className="text-[10px] text-[#8a95a5]">… 等共 {meeting.decisions.length} 条决议</p>
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          {botIncludeActions && (meeting.actionItems?.length || 0) > 0 && (
-                            <div className="border-t border-[#edf0f4] pt-2">
-                              <p className="font-semibold text-[#3370ff] flex items-center gap-1">
-                                <ListTodo size={13} /> 行动项 TODO ({meeting.actionItems.length})
-                              </p>
-                              <div className="mt-1 space-y-1 pl-1">
-                                {meeting.actionItems.slice(0, 3).map((act, i) => (
-                                  <div key={act.id} className="text-[#3b4758]">
-                                    <span className="font-medium text-[#202735]">
-                                      {i + 1}. {act.who.name}
-                                    </span>
-                                    ：{act.what}
-                                    {act.dueAt && <span className="text-amber-600"> (截止 {act.dueAt.slice(0, 10)})</span>}
-                                  </div>
-                                ))}
-                                {meeting.actionItems.length > 3 && (
-                                  <p className="text-[10px] text-[#8a95a5]">… 等共 {meeting.actionItems.length} 条待办</p>
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          {botIncludeRisks && (meeting.risks?.length || 0) > 0 && (
-                            <div className="border-t border-[#edf0f4] pt-2">
-                              <p className="font-semibold text-amber-700 flex items-center gap-1">
-                                <TriangleAlert size={13} /> 潜在风险 ({meeting.risks.length})
-                              </p>
-                              <div className="mt-1 space-y-1 pl-1">
-                                {meeting.risks.map((r, i) => (
-                                  <div key={r.id} className="text-[#3b4758]">
-                                    <span
-                                      className={`font-semibold ${
-                                        r.level === "high"
-                                          ? "text-red-600"
-                                          : r.level === "medium"
-                                          ? "text-amber-600"
-                                          : "text-slate-600"
-                                      }`}
-                                    >
-                                      {r.level === "high" ? "🔴" : "🟡"} [{r.level === "high" ? "高危" : "中度"}]{" "}
-                                    </span>
-                                    <span className="font-medium">{r.title}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </>
-                      )}
-
-                      {/* 底部按钮预览 */}
-                      <div className="border-t border-[#edf0f4] pt-2 flex gap-2">
-                        <span className="flex-1 text-center py-2 rounded-lg bg-[#3370ff] text-white font-medium text-[11px] shadow-sm">
-                          📊 查看飞书多维表格
-                        </span>
-                        {meeting.sourceUrl && (
-                          <span className="flex-1 text-center py-2 rounded-lg bg-[#edf1f7] text-[#4d5968] font-medium text-[11px]">
-                            📄 查看会议纪要
-                          </span>
+                      <div className="inline-block max-w-[95%] rounded-2xl rounded-tl-sm bg-white p-3.5 shadow-sm border border-[#e2e8f0] text-xs text-[#1e293b] leading-relaxed whitespace-pre-wrap select-text font-sans">
+                        <span>{botIntroText.trim()}</span>
+                        {!botIntroText.includes(botTableUrl || DEFAULT_FEISHU_BITABLE_URL) && (
+                          <div className="mt-2 pt-2 border-t border-[#f1f5f9] text-[#2563eb] hover:underline break-all flex items-center gap-1 font-mono text-[11px]">
+                            <ExternalLink size={12} className="shrink-0 text-[#3b82f6]" />
+                            <span>{botTableUrl || DEFAULT_FEISHU_BITABLE_URL}</span>
+                          </div>
                         )}
                       </div>
                     </div>
                   </div>
                 </div>
+                <p className="mt-2 text-[11px] text-[#8592a6]">
+                  💬 将以飞书原生标准纯文本方式直接推送到群内，链接可直接点击跳转。
+                </p>
               </div>
 
               {/* 右侧：播报参数设置与机器人选择 */}
@@ -896,13 +803,13 @@ export function MeetingDetail({
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-semibold text-[#485566]">
-                        文字描述（群内播报文案，可随时修改） <span className="text-red-500">*</span>
+                        消息文字描述（可自由修改） <span className="text-red-500">*</span>
                       </label>
                       <button
                         type="button"
                         onClick={() => {
                           const dateStr = meeting.meetingDate ? meeting.meetingDate.slice(0, 10) : formatDate(meeting.createdAt);
-                          setBotIntroText(`各位同学，${dateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接即可查阅详情与最新进展。`);
+                          setBotIntroText(`各位同学，${dateStr}「${meeting.title}」的会议结论与行动项已汇总更新至飞书多维表格。请相关责任人及时跟进并按时闭环，点击下方表格链接查阅详情与最新进展：`);
                         }}
                         className="text-[11px] text-[#3370ff] hover:underline"
                       >
@@ -911,26 +818,26 @@ export function MeetingDetail({
                     </div>
                     <textarea
                       required
-                      rows={3}
+                      rows={5}
                       value={botIntroText}
                       onChange={(e) => setBotIntroText(e.target.value)}
-                      placeholder="输入要发送至群聊的文字说明（支持 @所有人 或添加关注事项）..."
+                      placeholder="输入要发送至群聊的文字说明..."
                       className="w-full rounded-lg border border-[#dce2ea] p-2.5 text-xs outline-none focus:border-[#6e96f4] resize-none leading-relaxed"
                     />
                     <p className="mt-1 text-[11px] text-[#8692a4]">
-                      💡 该文字将作为群通知核心说明展示在飞书卡片首部，左侧可实时预览。
+                      💡 支持换行排版、添加 @成员 或补充重点待办提示。
                     </p>
                   </div>
 
-                  {/* 飞书表格文档链接 */}
+                  {/* 仅附带的飞书多维表格文档链接 */}
                   <div className="rounded-xl border border-[#e2e8f0] bg-[#f8fafc] p-3 space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-semibold text-[#3e4959] flex items-center gap-1.5">
-                        <Table2 size={13} className="text-[#3370ff]" /> 结论对应的飞书表格文档
+                        <Table2 size={13} className="text-[#3370ff]" /> 附带的飞书多维表格文档
                       </label>
                       {meeting.exports?.length > 0 && (
                         <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded font-medium">
-                          已关联最新导出
+                          已关联最新导出表
                         </span>
                       )}
                     </div>
@@ -942,81 +849,9 @@ export function MeetingDetail({
                       placeholder="https://segway-ninebot.feishu.cn/wiki/... 或 /base/..."
                       className="h-9 w-full rounded-lg border border-[#d6dfea] bg-white px-2.5 text-xs outline-none focus:border-[#3370ff]"
                     />
-                    <div className="flex items-center gap-2">
-                      <span className="text-[11px] text-[#6b7a90] shrink-0">表格名称：</span>
-                      <input
-                        type="text"
-                        value={botTableName}
-                        onChange={(e) => setBotTableName(e.target.value)}
-                        placeholder="例如：2026-10-14 需求对齐会"
-                        className="h-7 flex-1 rounded border border-[#d6dfea] bg-white px-2 text-xs outline-none focus:border-[#3370ff]"
-                      />
-                    </div>
-                  </div>
-
-                  {/* 播报模式 */}
-                  <div className="rounded-xl border border-[#e2e8f0] bg-[#f8fafc] p-3 space-y-2">
-                    <label className="block text-xs font-semibold text-[#485566]">卡片内容模式：</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="flex items-start gap-2 text-xs text-[#2c3645] bg-white p-2.5 rounded-lg border border-[#e4e9f0] cursor-pointer hover:border-[#3370ff]/40">
-                        <input
-                          type="radio"
-                          name="botCardMode"
-                          checked={botCardMode === "table_link_only"}
-                          onChange={() => setBotCardMode("table_link_only")}
-                          className="mt-0.5 text-[#3370ff]"
-                        />
-                        <div>
-                          <div className="font-semibold text-[11px]">极简表格通知（推荐）</div>
-                          <div className="text-[10px] text-[#718096]">仅发送文字描述 + 表格文档，群聊清爽</div>
-                        </div>
-                      </label>
-                      <label className="flex items-start gap-2 text-xs text-[#2c3645] bg-white p-2.5 rounded-lg border border-[#e4e9f0] cursor-pointer hover:border-[#3370ff]/40">
-                        <input
-                          type="radio"
-                          name="botCardMode"
-                          checked={botCardMode === "full"}
-                          onChange={() => setBotCardMode("full")}
-                          className="mt-0.5 text-[#3370ff]"
-                        />
-                        <div>
-                          <div className="font-semibold text-[11px]">展开明细清单</div>
-                          <div className="text-[10px] text-[#718096]">在卡片中展开结论与 TODO 列表</div>
-                        </div>
-                      </label>
-                    </div>
-
-                    {botCardMode === "full" && (
-                      <div className="mt-2 grid grid-cols-3 gap-2 border-t border-[#edf0f4] pt-2">
-                        <label className="flex items-center gap-1.5 text-xs text-[#2c3645] bg-white p-1.5 rounded border border-[#e4e9f0] cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={botIncludeDecisions}
-                            onChange={(e) => setBotIncludeDecisions(e.target.checked)}
-                            className="rounded text-[#3370ff]"
-                          />
-                          <span>结论 ({meeting.decisions?.length || 0})</span>
-                        </label>
-                        <label className="flex items-center gap-1.5 text-xs text-[#2c3645] bg-white p-1.5 rounded border border-[#e4e9f0] cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={botIncludeActions}
-                            onChange={(e) => setBotIncludeActions(e.target.checked)}
-                            className="rounded text-[#3370ff]"
-                          />
-                          <span>TODO ({meeting.actionItems?.length || 0})</span>
-                        </label>
-                        <label className="flex items-center gap-1.5 text-xs text-[#2c3645] bg-white p-1.5 rounded border border-[#e4e9f0] cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={botIncludeRisks}
-                            onChange={(e) => setBotIncludeRisks(e.target.checked)}
-                            className="rounded text-[#3370ff]"
-                          />
-                          <span>风险 ({meeting.risks?.length || 0})</span>
-                        </label>
-                      </div>
-                    )}
+                    <p className="text-[11px] text-[#718096]">
+                      消息中将仅包含此多维表格文档链接，便于群成员一键打开跟进。
+                    </p>
                   </div>
 
                   {/* 机器人选择 */}
@@ -1056,7 +891,7 @@ export function MeetingDetail({
                           </div>
                         )}
                         <p className="mt-1 text-[11px] text-[#7a8da3]">
-                          将把卡片直接推送到该机器人所在的飞书群聊。
+                          将把纯文本消息直接推送到该机器人所在的飞书群聊。
                         </p>
                       </div>
                     ) : (
@@ -1098,7 +933,7 @@ export function MeetingDetail({
                     className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#3370ff] px-4 text-xs font-medium text-white hover:bg-[#2864ed] disabled:opacity-60 shadow-sm"
                   >
                     {sendingBot ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
-                    {sendingBot ? "正在发送至群聊…" : "确认发送到群"}
+                    {sendingBot ? "正在发送至群聊…" : "发送纯文本通知"}
                   </button>
                 </div>
               </form>
