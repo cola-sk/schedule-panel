@@ -22,7 +22,10 @@ function loadEnvFile(filePath: string) {
   }
 }
 
-// 确保能加载当前项目目录的 .env.local 和 .env
+// 确保能加载当前项目目录的 .env.local 和 .env（兼顾不同 CWD 运行环境）
+const PROJECT_ROOT = path.resolve(__dirname, "../..");
+loadEnvFile(path.join(PROJECT_ROOT, ".env.local"));
+loadEnvFile(path.join(PROJECT_ROOT, ".env"));
 loadEnvFile(path.join(process.cwd(), ".env.local"));
 loadEnvFile(path.join(process.cwd(), ".env"));
 
@@ -39,7 +42,18 @@ export function getFeishuClient(): lark.Client {
   }
 
   if (!cachedClient) {
-    cachedClient = new lark.Client({ appId, appSecret });
+    cachedClient = new lark.Client({
+      appId,
+      appSecret,
+      loggerLevel: lark.LoggerLevel.error,
+      logger: {
+        debug: (...args: any[]) => console.error(...args),
+        info: (...args: any[]) => console.error(...args),
+        warn: (...args: any[]) => console.error(...args),
+        error: (...args: any[]) => console.error(...args),
+        trace: (...args: any[]) => console.error(...args),
+      },
+    });
   }
   return cachedClient;
 }
@@ -921,43 +935,77 @@ async function readBitableAsMarkdown(
 
   if (!tableId) throw new Error("多维表格中未找到有效数据表");
 
-  let recordsRes;
+  // 优先获取真实的字段元信息（表头及字段顺序）
+  let headers: string[] = [];
   try {
-    recordsRes = await client.bitable.appTableRecord.list({
+    const fieldsRes = await client.bitable.appTableField.list({
       path: { app_token: appToken, table_id: tableId },
-      params: { page_size: 500 },
+      params: { page_size: 100 },
     });
-  } catch (err) {
-    throw new Error(formatLarkError(err, "读取多维表格记录失败"));
+    if (fieldsRes.code === 0 && fieldsRes.data?.items?.length) {
+      headers = fieldsRes.data.items.map((f) => f.field_name);
+    }
+  } catch {
+    // 降级使用记录中的 keys
   }
 
-  if (recordsRes.code !== 0) {
-    throw new Error(formatLarkError(recordsRes, "读取多维表格记录失败"));
+  // 分页拉取所有记录
+  const items: Array<any> = [];
+  let pageToken: string | undefined;
+  do {
+    let recordsRes;
+    try {
+      recordsRes = await client.bitable.appTableRecord.list({
+        path: { app_token: appToken, table_id: tableId },
+        params: {
+          page_size: 500,
+          ...(pageToken ? { page_token: pageToken } : {}),
+        },
+      });
+    } catch (err) {
+      throw new Error(formatLarkError(err, "读取多维表格记录失败"));
+    }
+
+    if (recordsRes.code !== 0) {
+      throw new Error(formatLarkError(recordsRes, "读取多维表格记录失败"));
+    }
+
+    if (recordsRes.data?.items) {
+      items.push(...recordsRes.data.items);
+    }
+    pageToken = recordsRes.data?.has_more ? recordsRes.data.page_token : undefined;
+  } while (pageToken);
+
+  if (headers.length === 0) {
+    const fieldKeysSet = new Set<string>();
+    items.forEach((item) => {
+      Object.keys(item.fields || {}).forEach((k) => fieldKeysSet.add(k));
+    });
+    headers = Array.from(fieldKeysSet);
   }
 
-  const items = recordsRes.data?.items ?? [];
-  if (!items.length) {
+  if (headers.length === 0) {
     return {
       title: bitableTitle,
       format: "markdown",
       rowCount: 0,
-      content: `# ${bitableTitle}\n\n*表格暂无记录*`,
+      content: `# ${bitableTitle}\n\n*表格暂无记录且无字段*`,
     };
   }
 
-  const fieldKeysSet = new Set<string>();
-  items.forEach((item) => {
-    Object.keys(item.fields || {}).forEach((k) => fieldKeysSet.add(k));
-  });
-  const headers = Array.from(fieldKeysSet);
   const sep = headers.map(() => "---");
   const dataRows = items.map((item) => {
     const fields = (item.fields || {}) as Record<string, unknown>;
     return headers.map((h) => {
       const val = fields[h];
       if (val === undefined || val === null) return " ";
-      if (typeof val === "object") return JSON.stringify(val).replace(/\|/g, "\\|");
-      return String(val).trim().replace(/\|/g, "\\|") || " ";
+      if (typeof val === "object") {
+        if (Array.isArray(val)) {
+          return val.map((x) => (typeof x === "object" ? JSON.stringify(x) : String(x))).join(", ").replace(/\|/g, "\\|") || " ";
+        }
+        return JSON.stringify(val).replace(/\|/g, "\\|");
+      }
+      return String(val).trim().replace(/\r?\n/g, " ").replace(/\|/g, "\\|") || " ";
     });
   });
 
@@ -973,6 +1021,250 @@ async function readBitableAsMarkdown(
     rowCount: items.length,
     content: `# ${bitableTitle}\n\n${tableMd}`,
   };
+}
+
+/**
+ * 将 Markdown 表格、JSON 格式或纯文本解析为多维表格记录
+ */
+export function parseContentToBitableRecords(
+  content: string,
+  availableFields?: Array<{ field_name: string; field_id?: string; is_primary?: boolean }>,
+): Array<Record<string, any>> {
+  const trimmed = content.trim();
+  if (!trimmed) return [];
+
+  // 1. 尝试解析为 JSON
+  if (
+    (trimmed.startsWith("[") && trimmed.endsWith("]")) ||
+    (trimmed.startsWith("{") && trimmed.endsWith("}"))
+  ) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const list = Array.isArray(parsed)
+        ? parsed
+        : parsed.records || parsed.items || parsed.data;
+      if (Array.isArray(list)) {
+        return list
+          .filter((item) => item && typeof item === "object")
+          .map((item) => (item.fields && typeof item.fields === "object" ? item.fields : item));
+      }
+    } catch {
+      // 降级为表格或行文本
+    }
+  }
+
+  // 2. 尝试解析 Markdown 表格
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const tableLines = lines.filter((l) => l.startsWith("|") && l.endsWith("|"));
+  if (tableLines.length >= 2) {
+    const rawHeader = tableLines[0];
+    const headerCols = rawHeader
+      .slice(1, -1)
+      .split("|")
+      .map((c) => c.trim());
+
+    const contentRows = tableLines.slice(1).filter((line) => !isMarkdownTableSeparator(line));
+    if (contentRows.length > 0) {
+      return contentRows.map((line) => {
+        const cells = line
+          .slice(1, -1)
+          .split("|")
+          .map((c) => c.trim().replace(/\\\|/g, "|"));
+        const record: Record<string, any> = {};
+        headerCols.forEach((colName, idx) => {
+          if (colName && cells[idx] !== undefined) {
+            record[colName] = cells[idx];
+          }
+        });
+        return record;
+      });
+    }
+  }
+
+  // 3. 尝试解析键值对块（多条记录间用 --- 分隔）
+  const records: Array<Record<string, any>> = [];
+  let currentRecord: Record<string, any> = {};
+  for (const line of lines) {
+    if (line === "---" || line === "***") {
+      if (Object.keys(currentRecord).length > 0) {
+        records.push(currentRecord);
+        currentRecord = {};
+      }
+      continue;
+    }
+    const colonIdx = line.indexOf(":");
+    const ccolonIdx = line.indexOf("：");
+    const idx =
+      colonIdx > 0 && ccolonIdx > 0
+        ? Math.min(colonIdx, ccolonIdx)
+        : colonIdx > 0
+        ? colonIdx
+        : ccolonIdx;
+    if (idx > 0) {
+      const key = line.slice(0, idx).trim();
+      const val = line.slice(idx + 1).trim();
+      if (key) {
+        currentRecord[key] = val;
+        continue;
+      }
+    }
+  }
+  if (Object.keys(currentRecord).length > 0) {
+    records.push(currentRecord);
+  }
+  if (records.length > 0) {
+    return records;
+  }
+
+  // 4. 纯行文本兜底：写入首个文本字段或主字段
+  const primaryField =
+    availableFields?.find((f) => f.is_primary)?.field_name ||
+    availableFields?.[0]?.field_name ||
+    "内容";
+  return lines.map((l) => ({ [primaryField]: l }));
+}
+
+/**
+ * 向飞书多维表格追加记录
+ */
+export async function appendBitableRecords(
+  client: lark.Client,
+  appToken: string,
+  tableId: string | undefined,
+  content: string,
+) {
+  let finalTableId = tableId;
+  if (!finalTableId) {
+    const tablesRes = await client.bitable.appTable.list({
+      path: { app_token: appToken },
+      params: { page_size: 20 },
+    });
+    if (tablesRes.code !== 0 || !tablesRes.data?.items?.length) {
+      throw new Error(formatLarkError(tablesRes, "读取多维表格数据表失败"));
+    }
+    finalTableId = tablesRes.data.items[0].table_id;
+  }
+
+  // 获取字段元信息
+  let fields: Array<{ field_id: string; field_name: string; is_primary?: boolean }> = [];
+  try {
+    const fieldsRes = await client.bitable.appTableField.list({
+      path: { app_token: appToken, table_id: finalTableId },
+      params: { page_size: 100 },
+    });
+    if (fieldsRes.code === 0 && fieldsRes.data?.items) {
+      fields = fieldsRes.data.items as any;
+    }
+  } catch {}
+
+  const recordsData = parseContentToBitableRecords(content, fields);
+  if (recordsData.length === 0) {
+    return {
+      appToken,
+      tableId: finalTableId,
+      appendedRecords: 0,
+      message: "未解析到有效记录数据",
+    };
+  }
+
+  // 批量创建记录，单次上限 500 条
+  const BATCH_SIZE = 500;
+  let totalAppended = 0;
+  for (let i = 0; i < recordsData.length; i += BATCH_SIZE) {
+    const batch = recordsData.slice(i, i + BATCH_SIZE).map((fieldsObj) => ({
+      fields: fieldsObj,
+    }));
+
+    const createRes = await client.bitable.appTableRecord.batchCreate({
+      path: { app_token: appToken, table_id: finalTableId },
+      data: { records: batch },
+    });
+
+    if (createRes.code !== 0) {
+      throw new Error(
+        formatLarkError(
+          createRes,
+          `批量创建多维表格记录失败 (app_token: ${appToken}, table_id: ${finalTableId})`,
+        ),
+      );
+    }
+
+    totalAppended += createRes.data?.records?.length ?? batch.length;
+  }
+
+  return {
+    appToken,
+    tableId: finalTableId,
+    appendedRecords: totalAppended,
+    message: `成功向多维表格追加 ${totalAppended} 条记录`,
+  };
+}
+
+/**
+ * 全量覆盖/更新飞书多维表格（清空旧记录并写入新记录）
+ */
+export async function updateBitableRecords(
+  client: lark.Client,
+  appToken: string,
+  tableId: string | undefined,
+  content: string,
+) {
+  let finalTableId = tableId;
+  if (!finalTableId) {
+    const tablesRes = await client.bitable.appTable.list({
+      path: { app_token: appToken },
+      params: { page_size: 20 },
+    });
+    if (tablesRes.code !== 0 || !tablesRes.data?.items?.length) {
+      throw new Error(formatLarkError(tablesRes, "读取多维表格数据表失败"));
+    }
+    finalTableId = tablesRes.data.items[0].table_id;
+  }
+
+  // 1. 获取现有所有记录的 record_id
+  const recordIds: string[] = [];
+  let pageToken: string | undefined;
+  do {
+    const listRes = await client.bitable.appTableRecord.list({
+      path: { app_token: appToken, table_id: finalTableId },
+      params: {
+        page_size: 500,
+        ...(pageToken ? { page_token: pageToken } : {}),
+      },
+    });
+    if (listRes.code === 0 && listRes.data?.items) {
+      for (const item of listRes.data.items) {
+        if (item.record_id) recordIds.push(item.record_id);
+      }
+    }
+    pageToken = listRes.data?.has_more ? listRes.data.page_token : undefined;
+  } while (pageToken);
+
+  // 2. 批量删除旧记录
+  if (recordIds.length > 0) {
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < recordIds.length; i += BATCH_SIZE) {
+      const chunk = recordIds.slice(i, i + BATCH_SIZE);
+      const delRes = await client.bitable.appTableRecord.batchDelete({
+        path: { app_token: appToken, table_id: finalTableId },
+        data: { records: chunk },
+      });
+      if (delRes.code !== 0) {
+        throw new Error(
+          formatLarkError(
+            delRes,
+            `批量删除多维表格记录失败 (app_token: ${appToken}, table_id: ${finalTableId})`,
+          ),
+        );
+      }
+    }
+  }
+
+  // 3. 写入新记录
+  return appendBitableRecords(client, appToken, finalTableId, content);
 }
 
 /**
@@ -1164,7 +1456,28 @@ export async function appendDocumentContent(
   options?: DocumentWriteOptions,
 ) {
   const client = getFeishuClient();
-  const { documentId } = await resolveRealDocumentId(client, documentIdOrUrl);
+  const target = await resolveDocumentTarget(client, documentIdOrUrl);
+
+  // 如果目标是多维表格 Bitable
+  if (target.objType === "bitable") {
+    const bitableResult = await appendBitableRecords(
+      client,
+      target.token,
+      target.tableId,
+      content,
+    );
+    return {
+      documentId: target.token,
+      wikiToken: target.wikiToken,
+      appendedBlocks: bitableResult.appendedRecords,
+      url: target.wikiToken
+        ? `https://open.feishu.cn/wiki/${target.wikiToken}`
+        : `https://open.feishu.cn/base/${target.token}`,
+      message: bitableResult.message,
+    };
+  }
+
+  const documentId = target.token;
 
   const blocks = parseMarkdownToDocxBlocks(content, options);
   if (blocks.length === 0) {
@@ -1571,10 +1884,31 @@ export async function updateDocumentContent(
   options?: { title?: string } & DocumentWriteOptions,
 ) {
   const client = getFeishuClient();
-  const { documentId, wikiToken, title: oldTitle } = await resolveRealDocumentId(
-    client,
-    documentIdOrUrl,
-  );
+  const target = await resolveDocumentTarget(client, documentIdOrUrl);
+
+  // 如果目标是多维表格 Bitable
+  if (target.objType === "bitable") {
+    const bitableResult = await updateBitableRecords(
+      client,
+      target.token,
+      target.tableId,
+      newContent,
+    );
+    return {
+      documentId: target.token,
+      wikiToken: target.wikiToken,
+      title: options?.title || target.title || "多维表格",
+      updatedBlocks: bitableResult.appendedRecords,
+      url: target.wikiToken
+        ? `https://open.feishu.cn/wiki/${target.wikiToken}`
+        : `https://open.feishu.cn/base/${target.token}`,
+      message: bitableResult.message,
+    };
+  }
+
+  const documentId = target.token;
+  const wikiToken = target.wikiToken;
+  const oldTitle = target.title;
 
   // 1. 清空所有旧子块
   await clearDocumentChildren(client, documentId);

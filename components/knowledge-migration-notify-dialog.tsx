@@ -98,6 +98,7 @@ export function KnowledgeMigrationNotifyDialog({
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [availableBots, setAvailableBots] = useState<BotOption[]>([]);
+  const [zeroContributorsList, setZeroContributorsList] = useState<Array<{ name: string; email?: string }>>([]);
   const [showAdvancedWebhook, setShowAdvancedWebhook] = useState(false);
 
   const [config, setConfig] = useState<TaskNotifyConfig>({
@@ -109,6 +110,7 @@ export function KnowledgeMigrationNotifyDialog({
     time: "18:00",
     cycleType: "this_week",
     atAll: false,
+    atZeroContributors: false,
     silentDailyScanEnabled: true,
   });
 
@@ -118,11 +120,17 @@ export function KnowledgeMigrationNotifyDialog({
     setMessage(null);
     setLoading(true);
 
-    fetch(`/api/knowledge-migrations/tasks/${taskId}/notify`)
-      .then((res) => res.json())
-      .then((data) => {
+    Promise.all([
+      fetch(`/api/knowledge-migrations/tasks/${taskId}/notify`).then((res) => res.json()),
+      fetch(`/api/knowledge-migrations/tasks/${taskId}/member-status`).then((res) => res.json()).catch(() => ({})),
+    ])
+      .then(([data, memberData]) => {
         const bots = Array.isArray(data?.availableBots) ? data.availableBots : [];
         setAvailableBots(bots);
+
+        if (Array.isArray(memberData?.summary?.zeroContributors)) {
+          setZeroContributorsList(memberData.summary.zeroContributors);
+        }
 
         if (data?.notifyConfig) {
           const loadedConfig = data.notifyConfig as TaskNotifyConfig;
@@ -134,6 +142,7 @@ export function KnowledgeMigrationNotifyDialog({
             ...loadedConfig,
             cycleType: loadedConfig.cycleType || "this_week",
             atAll: Boolean(loadedConfig.atAll),
+            atZeroContributors: Boolean(loadedConfig.atZeroContributors),
             silentDailyScanEnabled: loadedConfig.silentDailyScanEnabled !== false,
           });
           // 若原本配了自定义 webhookUrl 但没有对应 botId，自动展开高级设置
@@ -193,6 +202,7 @@ export function KnowledgeMigrationNotifyDialog({
           sendMode: config.sendMode || "both",
           cycleType: config.frequency === "daily" ? "yesterday" : config.cycleType || "this_week",
           atAll: Boolean(config.atAll),
+          atZeroContributors: Boolean(config.atZeroContributors),
         }),
       });
       const data = await res.json();
@@ -490,6 +500,39 @@ export function KnowledgeMigrationNotifyDialog({
                   checked={Boolean(config.atAll)}
                   onChange={(e) => setConfig({ ...config, atAll: e.target.checked })}
                   className="size-5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                />
+              </div>
+
+              {/* 发送时 @ 未完成迁移且贡献为0的员工 开关 */}
+              <div className="flex items-start justify-between rounded-xl border border-amber-200/80 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/20 p-3.5">
+                <div className="space-y-1 pr-3">
+                  <div className="font-medium text-foreground flex items-center gap-1.5">
+                    <AtSign className="size-3.5 text-amber-600 dark:text-amber-400" />
+                    <span>催办：@ 未完成个人迁移且贡献为 0 的员工</span>
+                    {config.atZeroContributors ? (
+                      <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px]">
+                        已开启 ({zeroContributorsList.length}人)
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-muted-foreground text-[10px]">
+                        未开启
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    结合飞书名单与知识库统计，群通知时精准 @ 尚未完成个人文档迁移且贡献篇数为 0 的同学进行催办提醒。
+                  </p>
+                  {zeroContributorsList.length > 0 && (
+                    <div className="rounded bg-amber-100/70 dark:bg-amber-900/40 px-2 py-1 text-[11px] text-amber-900 dark:text-amber-200 font-mono">
+                      待催办名单 ({zeroContributorsList.length}人)：{zeroContributorsList.map((m) => m.name).join("、")}
+                    </div>
+                  )}
+                </div>
+                <input
+                  type="checkbox"
+                  checked={Boolean(config.atZeroContributors)}
+                  onChange={(e) => setConfig({ ...config, atZeroContributors: e.target.checked })}
+                  className="size-5 rounded border-gray-300 text-amber-600 focus:ring-amber-500 cursor-pointer mt-0.5"
                 />
               </div>
 

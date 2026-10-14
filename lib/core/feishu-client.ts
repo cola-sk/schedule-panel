@@ -8,22 +8,22 @@ const appSecret = process.env.FEISHU_APP_SECRET;
 
 let cachedClient: lark.Client | undefined;
 
-type SourceRotationMember = RotationMember & { email?: string; mobile?: string };
-type FeishuUserCache = Record<string, string>;
+export type SourceRotationMember = RotationMember & { email?: string; mobile?: string };
+export type FeishuUserCache = Record<string, string>;
 
-const USER_CACHE_FILE = path.join(process.cwd(), "data", "feishu-user-cache.json");
+export const USER_CACHE_FILE = path.join(process.cwd(), "data", "feishu-user-cache.json");
 const EMAIL_PATTERN = /[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/;
 const MOBILE_PATTERN = /(?:\+?86[-\s]?)?1[3-9]\d{9}/;
 
-function normalizeEmail(email: string): string {
+export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function normalizeMobile(mobile: string): string {
+export function normalizeMobile(mobile: string): string {
   return mobile.trim().replace(/[\s-]/g, "");
 }
 
-function readUserCache(): FeishuUserCache {
+export function readUserCache(): FeishuUserCache {
   try {
     if (fs.existsSync(USER_CACHE_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(USER_CACHE_FILE, "utf-8")) as FeishuUserCache;
@@ -35,7 +35,7 @@ function readUserCache(): FeishuUserCache {
   return {};
 }
 
-function writeUserCache(cache: FeishuUserCache) {
+export function writeUserCache(cache: FeishuUserCache) {
   try {
     fs.mkdirSync(path.dirname(USER_CACHE_FILE), { recursive: true });
     const tempFile = `${USER_CACHE_FILE}.tmp`;
@@ -187,10 +187,17 @@ async function resolveRotationOpenIds(
   }));
 }
 
+let lastAppId: string | undefined;
+let lastAppSecret: string | undefined;
+
 export function getLarkClient(): lark.Client | undefined {
-  if (!appId || !appSecret) return undefined;
-  if (!cachedClient) {
-    cachedClient = new lark.Client({ appId, appSecret });
+  const currentAppId = process.env.FEISHU_APP_ID || appId;
+  const currentAppSecret = process.env.FEISHU_APP_SECRET || appSecret;
+  if (!currentAppId || !currentAppSecret) return undefined;
+  if (!cachedClient || lastAppId !== currentAppId || lastAppSecret !== currentAppSecret) {
+    cachedClient = new lark.Client({ appId: currentAppId, appSecret: currentAppSecret });
+    lastAppId = currentAppId;
+    lastAppSecret = currentAppSecret;
   }
   return cachedClient;
 }
@@ -276,9 +283,9 @@ export function parseFeishuUrl(urlOrToken: string): {
 }
 
 /**
- * 通用飞书数据源名单读取器
+ * 通用飞书数据源原始名单读取器（保留姓名、邮箱、手机号等元数据）
  */
-export async function fetchRotationFromSource(sourceIdOrUrl: string): Promise<RotationMember[]> {
+export async function fetchRawMembersFromSource(sourceIdOrUrl: string): Promise<SourceRotationMember[]> {
   const client = getLarkClient();
   if (!client) {
     throw new Error("请先在环境变量或 .env.local 中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET");
@@ -319,6 +326,19 @@ export async function fetchRotationFromSource(sourceIdOrUrl: string): Promise<Ro
     rotation = await fetchDocxRecords(client, docId);
   }
 
+  return rotation;
+}
+
+/**
+ * 通用飞书数据源名单读取器（解析 Open ID）
+ */
+export async function fetchRotationFromSource(sourceIdOrUrl: string): Promise<RotationMember[]> {
+  const client = getLarkClient();
+  if (!client) {
+    throw new Error("请先在环境变量或 .env.local 中配置 FEISHU_APP_ID 和 FEISHU_APP_SECRET");
+  }
+
+  const rotation = await fetchRawMembersFromSource(sourceIdOrUrl);
   return resolveRotationOpenIds(client, rotation);
 }
 
@@ -429,7 +449,8 @@ async function fetchSheetRecords(
         method: "GET",
       });
       if (sheetsRes.code === 0 && sheetsRes.data?.sheets?.length) {
-        sheetId = sheetsRes.data.sheets[0].sheet_id;
+        const candidate = sheetsRes.data.sheets.find((s) => /名单|成员|主持|人员|通讯录|顺序/i.test(s.title));
+        sheetId = candidate ? candidate.sheet_id : sheetsRes.data.sheets[0].sheet_id;
       }
     } catch {
       // ignore

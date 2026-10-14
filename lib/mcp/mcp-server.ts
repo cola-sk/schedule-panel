@@ -18,14 +18,14 @@ export function createFeishuMcpServer(): McpServer {
     version: "1.0.0",
   });
 
-  // 1. 读取飞书文档
+  // 1. 读取飞书文档或表格
   server.tool(
     "feishu_read_document",
-    "读取飞书云文档 (Docx) 或知识库 (Wiki) 的内容，并转换为结构良好的 Markdown 格式或纯文本",
+    "读取飞书云文档 (Docx)、电子表格 (Sheet) 或多维表格 (Bitable/Base) 的内容，并转换为结构良好的 Markdown 格式或纯文本",
     {
       document_id_or_url: z
         .string()
-        .describe("飞书文档的 URL（如 https://.../docx/xxx 或 /wiki/xxx）或 document_id / wiki_token"),
+        .describe("飞书文档或表格的 URL（如 https://.../docx/xxx、/wiki/xxx 或 /base/xxx）或 document_id / wiki_token / app_token"),
       format: z
         .enum(["markdown", "text", "raw_blocks"])
         .default("markdown")
@@ -116,17 +116,17 @@ export function createFeishuMcpServer(): McpServer {
     },
   );
 
-  // 3. 向现有飞书文档追加内容
+  // 3. 向现有飞书文档或多维表格追加内容
   server.tool(
     "feishu_append_document",
-    "向指定的飞书云文档 (Docx) 末尾追加 Markdown 格式内容（自动解析标题、代码块、列表、引用与段落并写入）",
+    "向指定的飞书云文档 (Docx) 或多维表格 (Bitable) 追加内容（云文档自动追加 Markdown 块；多维表格自动将 Markdown 表格、JSON 或键值对新增为记录）",
     {
       document_id_or_url: z
         .string()
-        .describe("目标飞书文档的 URL 或 document_id"),
+        .describe("目标飞书文档或多维表格的 URL 或 document_id / wiki_token / app_token"),
       content: z
         .string()
-        .describe("要追加的 Markdown 格式内容（支持 # 标题、- 无序列表、1. 有序列表、``` 代码块、> 引用、--- 分割线等）"),
+        .describe("要追加的内容。云文档支持 Markdown 格式；多维表格支持 Markdown 表格、JSON 记录数组或键值对"),
     },
     async ({ document_id_or_url, content }) => {
       try {
@@ -136,7 +136,7 @@ export function createFeishuMcpServer(): McpServer {
           content: [
             {
               type: "text",
-              text: `成功向飞书文档追加内容！\n- 文档 ID: ${result.documentId}\n- 新增块数: ${result.appendedBlocks}\n- 链接: ${result.url}`,
+              text: `成功向飞书追加内容！\n- ID: ${result.documentId}\n- 新增块数/记录数: ${result.appendedBlocks}\n- 链接: ${result.url}`,
             },
           ],
         };
@@ -146,7 +146,7 @@ export function createFeishuMcpServer(): McpServer {
           content: [
             {
               type: "text",
-              text: `向飞书文档写入内容失败: ${error.message || String(error)}`,
+              text: `向飞书写入内容失败: ${error.message || String(error)}`,
             },
           ],
         };
@@ -189,17 +189,17 @@ export function createFeishuMcpServer(): McpServer {
     },
   );
 
-  // 5. 全量更新/覆盖飞书文档正文内容
+  // 5. 全量更新/覆盖飞书文档或多维表格内容
   server.tool(
     "feishu_update_document",
-    "全量更新/覆盖飞书云文档 (Docx) 正文内容（清空旧正文并替换为新的 Markdown 内容，可选择同时更新标题）",
+    "全量更新/覆盖飞书云文档 (Docx) 或多维表格 (Bitable) 内容（云文档清空旧正文并替换为新内容；多维表格清空旧记录并导入新记录）",
     {
       document_id_or_url: z
         .string()
-        .describe("目标飞书文档的 URL 或 document_id / wiki_token"),
+        .describe("目标飞书文档或多维表格的 URL 或 document_id / wiki_token / app_token"),
       content: z
         .string()
-        .describe("要更新替换的全新 Markdown 格式正文内容（支持标题、列表、代码块、引用等）"),
+        .describe("要更新替换的全新内容。云文档支持 Markdown 格式；多维表格支持 Markdown 表格、JSON 记录数组或键值对"),
       title: z
         .string()
         .optional()

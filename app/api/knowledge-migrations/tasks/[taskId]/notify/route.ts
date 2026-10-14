@@ -96,6 +96,12 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
           : prevConfig.cycleType === "yesterday" ? "this_week" : prevConfig.cycleType || "this_week",
       sendMode: body.sendMode || prevConfig.sendMode || "both",
       atAll: body.atAll !== undefined ? Boolean(body.atAll) : Boolean(prevConfig.atAll),
+      atZeroContributors:
+        body.atZeroContributors !== undefined
+          ? Boolean(body.atZeroContributors)
+          : Boolean(prevConfig.atZeroContributors),
+      zeroNoticeMessage:
+        body.zeroNoticeMessage !== undefined ? body.zeroNoticeMessage : prevConfig.zeroNoticeMessage,
       silentDailyScanEnabled: body.silentDailyScanEnabled !== undefined
         ? Boolean(body.silentDailyScanEnabled)
         : prevConfig.silentDailyScanEnabled !== false,
@@ -124,12 +130,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let sendModeOverride: "both" | "image_only" | "text_only" | undefined;
     let cycleTypeOverride: TaskNotifyConfig["cycleType"] | undefined;
     let atAllOverride: boolean | undefined;
+    let atZeroContributorsOverride: boolean | undefined;
     try {
       const body = await request.json();
       targetOverride = body?.webhookUrl?.trim() || body?.botId;
       sendModeOverride = body?.sendMode;
       cycleTypeOverride = body?.cycleType;
       if (body?.atAll !== undefined) atAllOverride = Boolean(body.atAll);
+      if (body?.atZeroContributors !== undefined) atZeroContributorsOverride = Boolean(body.atZeroContributors);
     } catch {
       // ignore empty body
     }
@@ -140,7 +148,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       sendModeOverride,
       cycleTypeOverride,
       atAllOverride,
-      "manual"
+      "manual",
+      atZeroContributorsOverride
     );
     return NextResponse.json(result);
   } catch (error) {

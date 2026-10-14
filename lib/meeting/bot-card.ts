@@ -1,6 +1,7 @@
 import type { FeishuMessagePayload } from "@/lib/core/types";
 import type { MeetingAnalysis } from "./types";
 import { DEFAULT_FEISHU_BITABLE_URL } from "./types";
+import { getAtTagByName } from "@/lib/roster";
 
 export interface BuildCardOptions {
   introText?: string;
@@ -133,9 +134,10 @@ export function buildMeetingInteractiveCard(
       elements.push({ tag: "hr" });
       const actionLines = actionItems.map((item, idx) => {
         const owner = item.who.name || "未指定";
+        const atTag = owner && owner !== "未指定" ? getAtTagByName(owner) : `**${owner}**`;
         const due = item.dueAt ? ` (截止: ${item.dueAt.slice(0, 10)})` : "";
         const deliverable = item.deliverable ? ` · 交付物: ${item.deliverable}` : "";
-        return `${idx + 1}. **${owner}**：${item.what}${due}${deliverable}`;
+        return `${idx + 1}. ${atTag}：${item.what}${due}${deliverable}`;
       });
       elements.push({
         tag: "div",

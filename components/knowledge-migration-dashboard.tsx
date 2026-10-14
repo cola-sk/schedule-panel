@@ -23,6 +23,7 @@ import {
   Settings2,
   Sparkles,
   Trash2,
+  UserCheck,
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -40,6 +41,7 @@ import {
 } from "@/lib/knowledge-migration/types";
 import { KnowledgeMigrationStatsPanel } from "./knowledge-migration-stats-panel";
 import { KnowledgeMigrationOtherDirectory } from "./knowledge-migration-other-directory";
+import { KnowledgeMigrationPersonalPanel } from "./knowledge-migration-personal-panel";
 
 type Taxonomy = Record<string, readonly string[]>;
 
@@ -145,13 +147,20 @@ export function KnowledgeMigrationDashboard() {
   const [directoryMigrating, setDirectoryMigrating] = useState(false);
   const [showDirectoryModal, setShowDirectoryModal] = useState(false);
 
-  // 视图模式：工作台、周度对比统计、其他目录整理
-  const [viewMode, setViewModeState] = useState<"workbench" | "stats" | "other">("workbench");
+  // 视图模式：工作台、周度对比统计、个人迁移与0贡献催办、其他目录整理
+  const [viewMode, setViewModeState] = useState<"workbench" | "stats" | "personal" | "other">("workbench");
 
   useEffect(() => {
     try {
-      const savedMode = localStorage.getItem("km_view_mode") as "workbench" | "stats" | "other";
-      if (savedMode === "workbench" || savedMode === "stats" || savedMode === "other") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const modeParam = urlParams.get("mode") as "workbench" | "stats" | "personal" | "other" | null;
+      if (modeParam === "workbench" || modeParam === "stats" || modeParam === "personal" || modeParam === "other") {
+        setViewModeState(modeParam);
+        return;
+      }
+
+      const savedMode = localStorage.getItem("km_view_mode") as "workbench" | "stats" | "personal" | "other";
+      if (savedMode === "workbench" || savedMode === "stats" || savedMode === "personal" || savedMode === "other") {
         setViewModeState(savedMode);
       }
     } catch {
@@ -159,10 +168,13 @@ export function KnowledgeMigrationDashboard() {
     }
   }, []);
 
-  const setViewMode = (mode: "workbench" | "stats" | "other") => {
+  const setViewMode = (mode: "workbench" | "stats" | "personal" | "other") => {
     setViewModeState(mode);
     try {
       localStorage.setItem("km_view_mode", mode);
+      const params = new URLSearchParams(window.location.search);
+      params.set("mode", mode);
+      window.history.replaceState(null, "", `?${params.toString()}`);
     } catch {
       // ignore
     }
@@ -777,6 +789,19 @@ export function KnowledgeMigrationDashboard() {
 
               <button
                 type="button"
+                onClick={() => setViewMode("personal")}
+                className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+                  viewMode === "personal"
+                    ? "bg-amber-600 text-white shadow-xs"
+                    : "bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground"
+                }`}
+              >
+                <UserCheck className="size-3.5" />
+                <span>个人迁移与0贡献催办</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setViewMode("other")}
                 className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
                   viewMode === "other"
@@ -816,6 +841,11 @@ export function KnowledgeMigrationDashboard() {
             notifySchedule={currentTask.notifySchedule}
             onNotifyConfigSaved={() => loadTaskDetail(currentTask.id, undefined, undefined, undefined, { silent: true })}
           />
+        )}
+
+        {/* 模式 2：个人迁移与 0 贡献催办管理 */}
+        {currentTask && viewMode === "personal" && (
+          <KnowledgeMigrationPersonalPanel taskId={currentTask.id} taskName={currentTask.name} />
         )}
 
         {currentTask && viewMode === "other" && <KnowledgeMigrationOtherDirectory taskId={currentTask.id} />}

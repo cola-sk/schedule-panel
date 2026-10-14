@@ -6,6 +6,7 @@ import { getAIModelConfig } from "@/lib/ai-config/store";
 import { readDocument } from "@/lib/mcp/feishu-doc-engine";
 import { buildMeetingAnalysisPrompt, getMeetingAnalysisPrompt } from "./prompts";
 import { findPreviousSeriesMeeting, updateMeeting } from "./store";
+import { getEmailByName } from "@/lib/roster";
 import type {
   MeetingActionItem,
   MeetingAnalysis,
@@ -200,7 +201,8 @@ function normalizeModelOutput(value: unknown, fallbackTitle: string) {
     const rawWho = valueAt(item, "who", "owner", "assignee", "responsible", "responsiblePerson", "responsible_person", "责任人");
     const whoRecord = isRecord(rawWho) ? rawWho : {};
     const name = textValue(valueAt(whoRecord, "name", "displayName", "display_name", "nickname", "花名") ?? rawWho, 80);
-    const email = textValue(valueAt(whoRecord, "email", "mail", "邮箱") ?? valueAt(item, "email", "ownerEmail", "owner_email"), 200);
+    const rawEmail = textValue(valueAt(whoRecord, "email", "mail", "邮箱") ?? valueAt(item, "email", "ownerEmail", "owner_email"), 200);
+    const email = rawEmail || (name ? getEmailByName(name) || "" : "");
     const what = textValue(valueAt(item, "what", "task", "action", "todo", "description", "content", "任务"), 500);
     const dueAt = textValue(valueAt(item, "dueAt", "due_at", "dueDate", "due_date", "deadline", "when", "截止时间"), 100);
     const deliverable = textValue(valueAt(item, "deliverable", "output", "artifact", "result", "交付物"), 500);

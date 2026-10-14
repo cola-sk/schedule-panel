@@ -13,6 +13,8 @@ import {
   persistMigrationState,
   saveTaskNotifyConfig,
 } from "./store";
+import { getTaskMemberContributionStatus } from "./personal-migration";
+import { getAtTagByName } from "@/lib/roster";
 import type { TaskMigrationStats, TaskNotifyConfig, StatCycleType, CycleStatsResult } from "./types";
 import type { FeishuMessagePayload, ReminderTask } from "@/lib/core/types";
 
@@ -235,6 +237,9 @@ export function buildMigrationStatsCard(
   imageKey?: string,
   cycleStats?: CycleStatsResult,
   atAll?: boolean,
+  atZeroContributors?: boolean,
+  zeroContributorMembers?: Array<{ name: string; atTag: string }>,
+  zeroNoticeMessage?: string,
 ): FeishuMessagePayload {
   const effectiveCycle = cycleStats || computeCycleStats(stats, "this_week");
   const cycleLabel = effectiveCycle.cycleLabel;
@@ -385,6 +390,22 @@ export function buildMigrationStatsCard(
             content: `🏆 **累计总贡献榜：**\n${rankText}`,
           },
         },
+        ...(atZeroContributors && zeroContributorMembers && zeroContributorMembers.length > 0
+          ? [
+              {
+                tag: "hr",
+              },
+              {
+                tag: "div",
+                text: {
+                  tag: "lark_md",
+                  content: `📢 **个人文档迁移待跟进 (${zeroContributorMembers.length}人)：**\n${
+                    zeroNoticeMessage?.trim() || "以下同学尚未完成个人文档到知识库的迁移且当前贡献篇数为 0，请尽快完成文档归档与知识库沉淀："
+                  }\n${zeroContributorMembers.map((m) => m.atTag).join(" ")}`,
+                },
+              },
+            ]
+          : []),
         ...(actions.length > 0
           ? [
               {
@@ -411,6 +432,7 @@ export async function sendTaskStatsNotification(
   cycleTypeOverride?: StatCycleType,
   atAllOverride?: boolean,
   triggerType: "scheduled" | "manual" = "scheduled",
+  atZeroContributorsOverride?: boolean,
 ): Promise<{ ok: boolean; message: string; stats?: TaskMigrationStats; imageKey?: string }> {
   const task = getTask(taskId);
   if (!task) throw new Error("任务不存在");
@@ -471,7 +493,61 @@ export async function sendTaskStatsNotification(
     if (!imageKey) {
       throw new Error("未能生成并获取飞书图片凭据");
     }
-    if (atAll) {
+    const shouldAtZero =
+      atZeroContributorsOverride !== undefined
+        ? atZeroContributorsOverride
+        : Boolean(task.notifyConfig?.atZeroContributors);
+
+    let zeroContributorMembers: Array<{ name: string; atTag: string }> = [];
+    if (shouldAtZero) {
+      try {
+        const { summary } = getTaskMemberContributionStatus(taskId);
+        zeroContributorMembers = summary.zeroContributors.map((m) => ({
+          name: m.name,
+          atTag: m.atTag || getAtTagByName(m.name),
+        }));
+      } catch (err) {
+        console.warn("加载待催办成员失败:", err);
+      }
+    }
+
+    if (atAll || (shouldAtZero && zeroContributorMembers.length > 0)) {
+      const cardElements: any[] = [];
+      if (atAll) {
+        cardElements.push({
+          tag: "div",
+          text: {
+            tag: "lark_md",
+            content: "<at id=all></at>",
+          },
+        });
+      }
+      cardElements.push({
+        tag: "img",
+        img_key: imageKey,
+        alt: {
+          tag: "plain_text",
+          content: "📊 知识库总量与重点子目录贡献统计",
+        },
+        mode: "fit_horizontal",
+        preview: true,
+      });
+
+      if (shouldAtZero && zeroContributorMembers.length > 0) {
+        cardElements.push(
+          { tag: "hr" },
+          {
+            tag: "div",
+            text: {
+              tag: "lark_md",
+              content: `📢 **个人文档迁移待跟进 (${zeroContributorMembers.length}人)：**\n${
+                task.notifyConfig?.zeroNoticeMessage?.trim() || "以下同学尚未完成个人文档到知识库的迁移且当前贡献篇数为 0，请尽快完成文档归档与知识库沉淀："
+              }\n${zeroContributorMembers.map((m) => m.atTag).join(" ")}`,
+            },
+          },
+        );
+      }
+
       await sendWebhookMessage(targetWebhook, {
         msg_type: "interactive",
         card: {
@@ -485,25 +561,7 @@ export async function sendTaskStatsNotification(
               content: `${task.name} 知识库迁移/贡献统计`,
             },
           },
-          elements: [
-            {
-              tag: "div",
-              text: {
-                tag: "lark_md",
-                content: "<at id=all></at>",
-              },
-            },
-            {
-              tag: "img",
-              img_key: imageKey,
-              alt: {
-                tag: "plain_text",
-                content: "📊 知识库总量与重点子目录贡献统计",
-              },
-              mode: "fit_horizontal",
-              preview: true,
-            },
-          ],
+          elements: cardElements,
         },
       });
     } else {
@@ -515,6 +573,24 @@ export async function sendTaskStatsNotification(
       });
     }
   } else {
+    const shouldAtZero =
+      atZeroContributorsOverride !== undefined
+        ? atZeroContributorsOverride
+        : Boolean(task.notifyConfig?.atZeroContributors);
+
+    let zeroContributorMembers: Array<{ name: string; atTag: string }> = [];
+    if (shouldAtZero) {
+      try {
+        const { summary } = getTaskMemberContributionStatus(taskId);
+        zeroContributorMembers = summary.zeroContributors.map((m) => ({
+          name: m.name,
+          atTag: m.atTag || getAtTagByName(m.name),
+        }));
+      } catch (err) {
+        console.warn("加载待催办成员失败:", err);
+      }
+    }
+
     const cardPayload = buildMigrationStatsCard(
       stats,
       task.name,
@@ -523,6 +599,9 @@ export async function sendTaskStatsNotification(
       imageKey,
       cycleStats,
       atAll,
+      shouldAtZero,
+      zeroContributorMembers,
+      task.notifyConfig?.zeroNoticeMessage,
     );
     await sendWebhookMessage(targetWebhook, cardPayload);
   }
