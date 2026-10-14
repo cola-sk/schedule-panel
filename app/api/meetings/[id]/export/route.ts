@@ -11,6 +11,9 @@ const exportSchema = z.object({
     .max(2000)
     .transform((val) => (/^https?:\/\//i.test(val) ? val : `https://${val}`))
     .pipe(z.string().url("链接格式不正确，请输入有效的飞书 URL")),
+  includeDecisions: z.boolean().optional().default(true),
+  includeActionItems: z.boolean().optional().default(true),
+  includeRisks: z.boolean().optional().default(true),
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -18,14 +21,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     const { id } = await context.params;
     const meeting = getMeeting(id);
     if (!meeting) return NextResponse.json({ error: "会议记录不存在" }, { status: 404 });
-    const { targetUrl } = exportSchema.parse(await request.json());
-    const result = await exportMeetingActions(meeting, targetUrl);
+    const options = exportSchema.parse(await request.json());
+    const result = await exportMeetingActions(meeting, options);
     const exported = {
       id: `export_${crypto.randomUUID()}`,
-      targetUrl,
+      targetUrl: options.targetUrl,
       tableId: result.tableId,
+      tableName: result.tableName,
       exportedAt: new Date().toISOString(),
       recordCount: result.recordCount,
+      types: result.types,
     };
     addMeetingExport(id, exported);
     return NextResponse.json({ exported, tableName: result.tableName });

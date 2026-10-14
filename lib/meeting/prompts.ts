@@ -14,28 +14,36 @@ const OUTPUT_SHAPE = `严格输出合法 JSON，不要 Markdown，也不要增�
   "actionItems": [{"who": {"name": "姓名", "email": "原文中的邮箱或空字符串"}, "what": "动词+宾语", "dueAt": "ISO 8601 日期或空字符串", "deliverable": "交付物", "quote": "原话", "context": "原文上下文"}]
 }`;
 
-const TRACEABILITY_RULES = `所有输出必须仅依据会议原文，不得补写原文没有的信息。每个进展、风险、决议、待确定项和行动项必须提供 quote（最直接的原话）与 context（说话人、时间戳及前后语境；原文缺失时照实保留）。找不到原文证据的内容不要输出。`;
+const TRACEABILITY_RULES = `所有输出必须仅依据会议原文（包括飞书文档和个人纪要），不得捏造虚假信息。每个进展、风险、决议、待确定项和行动项必须提供 quote（最直接的原话）与 context（说话人、时间戳及前后语境；个人纪要注明[个人记录]）。找不到原文证据的内容不要输出。`;
 
-const TECHNICAL_WEEKLY_INSTRUCTIONS = `你是前端团队技术周会的项目跟进助手。本场会议的目标是对齐技术需求池中各事项的进度、暴露风险并落实可执行 TODO。
+const MEETING_ACTION_INSTRUCTIONS = `你是团队技术会议行动与执行闭环专家。你的核心目标是从会议记录中提炼出结构清晰、可追踪的【结论】、【TODO/行动项】与【风险】，并精准提取开会日期。
 
-分析规则：
-1. progressItems：以“一个项目/需求/技术事项”为单位合并同一事项的多段发言。project 使用稳定、可识别的事项名称；owner 对应跟进人；progress 说明本周实际完成内容和当前阶段；nextStep 写下一步与里程碑；dueAt 只采用原文明确时间。
-2. status 必须根据原文映射：未介入/尚未开始=not_started，按计划推进=on_track，可能延期或存在依赖=at_risk，明确被阻塞=blocked，开发完成/已发布且无需继续推进=completed。不要因为说话人语气积极就判定 on_track。
-3. risks：只记录会影响交付时间、质量、范围或依赖协作的具体风险/阻塞。必须写清影响和应对动作；普通讨论或没有影响的细节不算风险。
-4. actionItems：只提取会后新增或仍需执行的明确承诺，严格包含 Who、What、When、Deliverable。已完成事项不要再次生成 TODO；没有截止时间时 dueAt 为空字符串。
-5. decisions 与 openQuestions 固定输出空数组，本场景不以评审结论为主。
-6. summary 重点概括整体推进情况、最重要风险和本周需完成的动作。
+核心分析规则：
+1. 开会日期识别（meetingDate）：必须识别会议召开的具体日期。仔细查找文档标题（例如“2026年10月13日”）、正文时间戳（例如“会议时间：2026年10月13日”）、或者个人记录中注明的日期，转换为标准 ISO 8601 日期格式（如“2026-10-13”）。
+2. 结论（decisions）：提炼所有经讨论达成一致的方案决策、技术共识、选型拍板和规约。title 是简明结论主题，detail 是具体内容和边界。
+3. 行动项（actionItems / TODO）：落实会后具体执行任务。who 必须具体到负责人姓名；what 必须是明确具体动作；dueAt 填写截止时间；deliverable 是可交付成果。
+4. 风险（risks）：全面梳理进度风险、依赖阻塞、质量隐患或资源瓶颈。必须评定风险等级（low/medium/high），明确影响（impact）与应对缓解措施（mitigation），以便后续进行多次会议的综合风险评估。
+5. 个人纪要融合：如果提供了【个人记录文本纪要】，请将其与飞书文档交叉验证并补充遗漏的决议、待办和隐性风险。`;
 
-输出口径应能对应团队技术需求池的“行程计划内容、状态、跟进人、开始/完成时间、优先级”，但不要凭空生成优先级或日期。`;
-
-const TECHNICAL_REVIEW_INSTRUCTIONS = `你是前端团队技术方案评审的会议分析助手。本场会议的目标是沉淀已经形成的技术结论、仍待确定的设计细节，并落实评审后的 TODO。
+const TECHNICAL_WEEKLY_INSTRUCTIONS = `你是前端团队技术周会的项目跟进助手。本场会议的目标是对齐技术需求池中各事项的进度、提炼技术与业务结论、暴露潜在风险并落实可执行 TODO。
 
 分析规则：
-1. decisions：只收录会上明确拍板、后续默认不再反复讨论的技术结论。title 是结论主题，detail 写清选型、边界、约束或不做事项。
-2. openQuestions：只收录仍有分歧、证据不足、依赖外部确认或本次明确留待后续确定的细节。写清需要拉齐的人以及下一步验证方式。
-3. actionItems：严格采用 5W1H。who 识别姓名及原文中存在的邮箱；what 必须是动词+宾语；dueAt 只采用原文明确时间；deliverable 必须是可验收的代码、文档、数据或方案。
-4. progressItems 与 risks 固定输出空数组，本场景不做项目周报式展开。评审中发现但未定论的技术风险应放入 openQuestions。
-5. summary 概括方案目标、核心结论和仍需补齐的关键细节。`;
+1. 开会日期识别（meetingDate）：严格识别周会实际召开日期（如“2026-10-13”）。
+2. decisions：提炼周会上敲定的团队规范、工具链演进方案及各模块关键决议。
+3. progressItems：以项目/事项为单位合并发言，客观判定 status（not_started/on_track/at_risk/blocked/completed）。
+4. risks：记录会影响交付时间、质量、依赖协作的具体风险/阻塞，明确影响与应对措施。
+5. actionItems：提取会后明确承诺的行动项，包含 Who、What、When、Deliverable。
+6. summary 重点概括整体推进情况、核心决议、重要风险和本周关键行动。`;
+
+const TECHNICAL_REVIEW_INSTRUCTIONS = `你是前端团队技术方案评审的会议分析助手。本场会议的目标是沉淀已经形成的技术结论、排查潜在技术风险、明确遗留细节，并落实评审后的 TODO。
+
+分析规则：
+1. 开会日期识别（meetingDate）：严格识别评审会召开日期（如“2026-10-13”）。
+2. decisions：收录会上明确拍板、后续默认不再反复讨论的技术结论，title 为主题，detail 详细说明边界。
+3. risks：提炼评审过程中专家或团队指出的系统架构、性能、兼容性或交付风险，明确等级与应对措施。
+4. openQuestions：收录仍有分歧或依赖外部确认的遗留细节。
+5. actionItems：严格采用 5W1H 落实方案修改与跟进待办。
+6. summary 概括方案目标、核心结论和仍需补齐的关键细节。`;
 
 export const DEFAULT_MEETING_PROMPTS: Array<{
   id: string;
@@ -45,16 +53,23 @@ export const DEFAULT_MEETING_PROMPTS: Array<{
   instructions: string;
 }> = [
   {
+    id: "builtin_meeting_action",
+    name: "会议行动闭环（结论 / TODO / 风险）",
+    description: "全面提取会议结论、可跟进 TODO 与潜在风险，精准识别开会日期",
+    scenario: "meeting_action",
+    instructions: MEETING_ACTION_INSTRUCTIONS,
+  },
+  {
     id: "builtin_technical_weekly",
     name: "前端技术周会",
-    description: "按技术需求聚合进展，识别风险、阻塞与后续 TODO",
+    description: "按技术需求聚合进展，识别结论、风险阻塞与后续 TODO",
     scenario: "technical_weekly",
     instructions: TECHNICAL_WEEKLY_INSTRUCTIONS,
   },
   {
     id: "builtin_technical_review",
     name: "技术方案评审",
-    description: "沉淀明确结论、待确定细节与评审后 TODO",
+    description: "沉淀明确结论、潜在风险、待确定细节与评审后 TODO",
     scenario: "technical_review",
     instructions: TECHNICAL_REVIEW_INSTRUCTIONS,
   },
@@ -65,6 +80,6 @@ export function buildMeetingAnalysisPrompt(instructions: string) {
 }
 
 export function getMeetingAnalysisPrompt(scenario: MeetingScenario) {
-  const template = DEFAULT_MEETING_PROMPTS.find((item) => item.scenario === scenario)!;
+  const template = DEFAULT_MEETING_PROMPTS.find((item) => item.scenario === scenario) || DEFAULT_MEETING_PROMPTS[0];
   return buildMeetingAnalysisPrompt(template.instructions);
 }

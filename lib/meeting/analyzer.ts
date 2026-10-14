@@ -239,6 +239,52 @@ function excerptMeeting(content: string) {
   return `${content.slice(0, 45_000)}\n\n……（中段已截断）……\n\n${content.slice(-15_000)}`;
 }
 
+export function extractMeetingDate(input?: {
+  modelDate?: string;
+  title?: string;
+  content?: string;
+  notes?: string;
+}): string | undefined {
+  const normalize = (y: string | number, m: string | number, d: string | number) => {
+    const year = Number(y) < 100 ? 2000 + Number(y) : Number(y);
+    const month = String(m).padStart(2, "0");
+    const day = String(d).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
+  if (input?.modelDate?.trim()) {
+    const val = input.modelDate.trim();
+    const isoMatch = val.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (isoMatch) return normalize(isoMatch[1], isoMatch[2], isoMatch[3]);
+    const zhMatch = val.match(/(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+    if (zhMatch) return normalize(zhMatch[1], zhMatch[2], zhMatch[3]);
+    const ts = Date.parse(val);
+    if (!Number.isNaN(ts)) {
+      const dt = new Date(ts);
+      return normalize(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+    }
+  }
+
+  const candidates = [
+    input?.title || "",
+    input?.notes?.slice(0, 1000) || "",
+    input?.content?.slice(0, 2000) || "",
+  ].join("\n");
+
+  const fullMatch = candidates.match(/(20\d{2})[年\-/.]\s*(\d{1,2})[月\-/.]\s*(\d{1,2})[日号]?/);
+  if (fullMatch) {
+    return normalize(fullMatch[1], fullMatch[2], fullMatch[3]);
+  }
+
+  const monthDayMatch = candidates.match(/(\d{1,2})月(\d{1,2})日/);
+  if (monthDayMatch) {
+    const currentYear = new Date().getFullYear();
+    return normalize(currentYear, monthDayMatch[1], monthDayMatch[2]);
+  }
+
+  return undefined;
+}
+
 function normalizeDate(value?: string) {
   if (!value?.trim()) return undefined;
   const timestamp = Date.parse(value);
@@ -247,16 +293,43 @@ function normalizeDate(value?: string) {
 
 export async function analyzeMeeting(meeting: MeetingAnalysis): Promise<MeetingAnalysis> {
   try {
-    const scenario = meeting.scenario || "technical_review";
+    const scenario = meeting.scenario || "meeting_action";
     const config = getAIModelConfig();
     if (!config.llmBaseUrl || !config.llmApiKey || !config.llmModel) {
       throw new Error("尚未配置 AI 模型，请先前往设置完成模型配置");
     }
 
-    const document = await readDocument(meeting.sourceUrl, { format: "text" });
-    if (!("content" in document) || !document.content?.trim()) {
-      throw new Error("会议文档没有可分析的文本内容");
+    let documentTitle = "会议纪要";
+    let documentContent = "";
+
+    if (meeting.sourceUrl?.trim()) {
+      const document = await readDocument(meeting.sourceUrl.trim(), { format: "text" });
+      if ("content" in document && document.content?.trim()) {
+        documentContent = document.content;
+      }
+      if (document.title?.trim()) {
+        documentTitle = document.title.trim();
+      }
     }
+
+    const hasNotes = Boolean(meeting.personalNotes?.trim());
+    if (!documentContent && !hasNotes) {
+      throw new Error("请提供有效的飞书会议文档链接，或输入个人记录的文本纪要");
+    }
+
+    if (!documentContent && hasNotes) {
+      const firstLine = meeting.personalNotes!.trim().split("\n")[0].trim().slice(0, 60);
+      documentTitle = firstLine || "个人记录纪要";
+    }
+
+    const sections: string[] = [];
+    if (documentContent) {
+      sections.push(`【飞书会议文档原文】\n${excerptMeeting(documentContent)}`);
+    }
+    if (hasNotes) {
+      sections.push(`【个人记录文本纪要】\n${meeting.personalNotes!.trim()}`);
+    }
+    const combinedContent = sections.join("\n\n");
 
     const previous = meeting.seriesName
       ? findPreviousSeriesMeeting(meeting.seriesName, meeting.id, scenario)
@@ -280,13 +353,21 @@ export async function analyzeMeeting(meeting: MeetingAnalysis): Promise<MeetingA
         },
         {
           role: "user",
-          content: `【文档标题】${document.title}\n【会议系列】${meeting.seriesName || "未指定"}${previousContext}\n\n【会议原文】\n${excerptMeeting(document.content)}`,
+          content: `【文档标题】${documentTitle}\n【会议系列】${meeting.seriesName || "未指定"}${previousContext}\n\n${combinedContent}`,
         },
       ],
     });
 
     const raw = response.choices[0]?.message?.content || "";
-    const result = analysisSchema.parse(normalizeModelOutput(parseJson(raw), document.title));
+    const result = analysisSchema.parse(normalizeModelOutput(parseJson(raw), documentTitle));
+
+    const recognizedDate = extractMeetingDate({
+      modelDate: result.meetingDate,
+      title: documentTitle,
+      content: documentContent,
+      notes: meeting.personalNotes,
+    });
+
     const actionItems: MeetingActionItem[] = result.actionItems.map((item) => ({
       id: `action_${crypto.randomUUID()}`,
       who: { name: item.who.name, email: item.who.email || undefined },
@@ -320,9 +401,9 @@ export async function analyzeMeeting(meeting: MeetingAnalysis): Promise<MeetingA
     }));
     const completed = updateMeeting(meeting.id, {
       scenario,
-      sourceTitle: document.title,
+      sourceTitle: documentTitle,
       title: result.title,
-      meetingDate: normalizeDate(result.meetingDate),
+      meetingDate: recognizedDate || normalizeDate(result.meetingDate),
       durationMinutes: result.durationMinutes,
       participants: result.participants,
       summary: result.summary,

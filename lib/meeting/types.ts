@@ -1,6 +1,6 @@
 export type MeetingAnalysisStatus = "analyzing" | "completed" | "failed";
 export type MeetingActionStatus = "pending" | "in_progress" | "completed";
-export type MeetingScenario = "technical_weekly" | "technical_review";
+export type MeetingScenario = "meeting_action" | "technical_weekly" | "technical_review";
 export type MeetingProgressStatus = "not_started" | "on_track" | "at_risk" | "blocked" | "completed";
 export type MeetingRiskLevel = "low" | "medium" | "high";
 
@@ -57,8 +57,17 @@ export interface MeetingExportRecord {
   id: string;
   targetUrl: string;
   tableId: string;
+  tableName?: string;
   exportedAt: string;
   recordCount: number;
+  types?: ("conclusion" | "todo" | "risk")[];
+}
+
+export interface MeetingExportOptions {
+  targetUrl: string;
+  includeDecisions?: boolean;
+  includeActionItems?: boolean;
+  includeRisks?: boolean;
 }
 
 export interface MeetingPromptTemplate {
@@ -78,7 +87,8 @@ export interface MeetingAnalysis {
   promptId: string;
   promptName: string;
   promptInstructions: string;
-  sourceUrl: string;
+  sourceUrl?: string;
+  personalNotes?: string;
   sourceTitle: string;
   title: string;
   seriesName?: string;
@@ -102,12 +112,46 @@ export interface MeetingAnalysis {
 }
 
 export interface MeetingCreateInput {
-  sourceUrl: string;
+  sourceUrl?: string;
+  personalNotes?: string;
   promptId: string;
   seriesName?: string;
 }
 
+export interface MultiMeetingRiskAssessment {
+  id: string;
+  title: string;
+  meetingIds: string[];
+  meetingCount: number;
+  dateRange: { start?: string; end?: string };
+  overallRiskLevel: "low" | "medium" | "high";
+  summary: string;
+  persistentRisks: Array<{
+    title: string;
+    level: "low" | "medium" | "high";
+    occurrences: number;
+    impact: string;
+    mitigation: string;
+  }>;
+  emergingRisks: Array<{
+    title: string;
+    level: "low" | "medium" | "high";
+    fromMeetingTitle: string;
+    meetingDate?: string;
+    impact: string;
+  }>;
+  recommendations: string[];
+  createdAt: string;
+}
+
+export const DEFAULT_FEISHU_BITABLE_URL =
+  "https://segway-ninebot.feishu.cn/wiki/GkpgwSzwwiMtpckxJIwcKVSZnMh?base_hp_from=larktab&table=tblnWKuYFte8wMP0&view=vewt4Taott";
+
 export const meetingScenarioMeta: Record<MeetingScenario, { label: string; description: string }> = {
+  meeting_action: {
+    label: "会议行动闭环",
+    description: "结构化提取结论、TODO与潜在风险，精准识别开会日期",
+  },
   technical_weekly: {
     label: "前端技术周会",
     description: "提取事项进展、风险/阻塞与后续 TODO",
@@ -117,3 +161,4 @@ export const meetingScenarioMeta: Record<MeetingScenario, { label: string; descr
     description: "提取评审结论、待确定细节与后续 TODO",
   },
 };
+

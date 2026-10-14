@@ -74,15 +74,20 @@ export function createMeeting(input: MeetingCreateInput): MeetingAnalysis {
   const prompt = getMeetingPrompt(input.promptId);
   if (!prompt) throw new Error("所选 Prompt 不存在或已被删除");
   const timestamp = now();
+  const sourceUrl = input.sourceUrl?.trim() || undefined;
+  const personalNotes = input.personalNotes?.trim() || undefined;
+  const initialTitle = personalNotes ? personalNotes.split("\n")[0].trim().slice(0, 40) : "正在分析会议";
+
   const meeting: MeetingAnalysis = {
     id: `meeting_${crypto.randomUUID()}`,
     scenario: prompt.scenario,
     promptId: prompt.id,
     promptName: prompt.name,
     promptInstructions: prompt.instructions,
-    sourceUrl: input.sourceUrl.trim(),
-    sourceTitle: "正在读取会议记录",
-    title: "正在分析会议",
+    sourceUrl,
+    personalNotes,
+    sourceTitle: sourceUrl ? "正在读取会议记录" : "个人记录文本纪要",
+    title: initialTitle,
     seriesName: input.seriesName?.trim() || undefined,
     participants: [],
     summary: "",
