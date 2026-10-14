@@ -20,6 +20,7 @@ import {
   ListTodo,
   LoaderCircle,
   Plus,
+  Save,
   Search,
   Settings2,
   ShieldAlert,
@@ -58,7 +59,7 @@ export function MeetingHistory({
   initialPrompts: MeetingPromptTemplate[];
 }) {
   const router = useRouter();
-  const [meetings] = useState(initialMeetings);
+  const [meetings, setMeetings] = useState(initialMeetings);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | MeetingAnalysisStatus>("all");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -76,6 +77,91 @@ export function MeetingHistory({
   const [promptId, setPromptId] = useState(defaultPromptId);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  // 编辑与重新生成状态
+  const [editingMeeting, setEditingMeeting] = useState<MeetingAnalysis | null>(null);
+  const [editSourceUrl, setEditSourceUrl] = useState("");
+  const [editPersonalNotes, setEditPersonalNotes] = useState("");
+  const [editSeriesName, setEditSeriesName] = useState("");
+  const [editPromptId, setEditPromptId] = useState("");
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  function startEdit(meeting: MeetingAnalysis) {
+    setEditingMeeting(meeting);
+    setEditSourceUrl(meeting.sourceUrl || "");
+    setEditPersonalNotes(meeting.personalNotes || "");
+    setEditSeriesName(meeting.seriesName || "");
+    setEditPromptId(meeting.promptId || defaultPromptId);
+    setEditError("");
+  }
+
+  async function submitEdit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!editingMeeting) return;
+    if (!editSourceUrl.trim() && !editPersonalNotes.trim()) {
+      setEditError("请至少提供飞书会议文档链接或输入个人记录的文本纪要");
+      return;
+    }
+    if (editSourceUrl.trim() && !/feishu\.cn\/(docx|docs|wiki)\//i.test(editSourceUrl.trim())) {
+      setEditError("目前仅支持飞书文档、妙记整理稿或 Wiki 文档链接");
+      return;
+    }
+    setEditSubmitting(true);
+    setEditError("");
+    try {
+      const response = await fetch(`/api/meetings/${editingMeeting.id}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceUrl: editSourceUrl.trim() || "",
+          personalNotes: editPersonalNotes.trim() || "",
+          seriesName: editSeriesName.trim() || "",
+          promptId: editPromptId || undefined,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.meeting) throw new Error(data.error || "重新生成失败");
+      router.push(`/meeting/${data.meeting.id}`);
+    } catch (err: any) {
+      setEditError(err.message || "重新生成失败");
+      setEditSubmitting(false);
+    }
+  }
+
+  async function submitSaveOnly() {
+    if (!editingMeeting) return;
+    if (!editSourceUrl.trim() && !editPersonalNotes.trim()) {
+      setEditError("请至少提供飞书会议文档链接或输入个人记录的文本纪要");
+      return;
+    }
+    if (editSourceUrl.trim() && !/feishu\.cn\/(docx|docs|wiki)\//i.test(editSourceUrl.trim())) {
+      setEditError("目前仅支持飞书文档、妙记整理稿或 Wiki 文档链接");
+      return;
+    }
+    setEditSubmitting(true);
+    setEditError("");
+    try {
+      const response = await fetch(`/api/meetings/${editingMeeting.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceUrl: editSourceUrl.trim() || null,
+          personalNotes: editPersonalNotes.trim() || null,
+          seriesName: editSeriesName.trim() || null,
+          promptId: editPromptId || undefined,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.meeting) throw new Error(data.error || "保存失败");
+      setMeetings((prev) => prev.map((m) => (m.id === data.meeting.id ? data.meeting : m)));
+      setEditingMeeting(null);
+    } catch (err: any) {
+      setEditError(err.message || "保存失败");
+    } finally {
+      setEditSubmitting(false);
+    }
+  }
 
   // 风险评估状态
   const [assessing, setAssessing] = useState(false);
@@ -246,7 +332,7 @@ export function MeetingHistory({
             {filtered.length ? (
               <div className="divide-y divide-[#edf0f4]">
                 {filtered.map((meeting) => (
-                  <MeetingRow key={meeting.id} meeting={meeting} />
+                  <MeetingRow key={meeting.id} meeting={meeting} onEdit={() => startEdit(meeting)} />
                 ))}
               </div>
             ) : (
@@ -604,11 +690,183 @@ export function MeetingHistory({
           </div>
         </div>
       )}
+
+      {/* 针对单条任务的编辑与重新生成弹窗 */}
+      {editingMeeting && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-[#172033]/40 p-4 backdrop-blur-[2px] overflow-y-auto"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget && !editSubmitting && setEditingMeeting(null)
+          }
+        >
+          <div className="w-full max-w-2xl my-8 rounded-2xl bg-white p-6 shadow-2xl border border-white/60">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="grid size-9 place-items-center rounded-xl bg-blue-50 text-[#3370ff]">
+                  <FileEdit size={19} />
+                </span>
+                <div>
+                  <h2 className="text-lg font-semibold text-[#1f2735]">编辑会议纪要与重新生成</h2>
+                  <p className="mt-0.5 text-xs text-[#718096]">
+                    正在编辑「{editingMeeting.title}」的输入来源
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={editSubmitting}
+                onClick={() => setEditingMeeting(null)}
+                className="grid size-8 place-items-center rounded-lg text-[#7c8797] hover:bg-[#f3f5f7]"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={submitEdit} className="mt-5 space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-[#3d4859] mb-1">
+                  分析模板
+                </label>
+                <select
+                  value={editPromptId}
+                  onChange={(e) => setEditPromptId(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-[#dce2ea] bg-white px-3 text-xs outline-none focus:border-[#6e96f4]"
+                >
+                  {initialPrompts.map((prompt) => (
+                    <option key={prompt.id} value={prompt.id}>
+                      {prompt.builtIn ? "[内置] " : ""}
+                      {prompt.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-[#3d4859]">
+                    飞书会议文档链接 <span className="font-normal text-[#98a1af]">（可选）</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditSourceUrl(
+                          "https://segway-ninebot.feishu.cn/docx/JP3cdOFWiohfq1x5wUqc2uAWnuf"
+                        )
+                      }
+                      className="text-[11px] text-[#3370ff] hover:underline"
+                    >
+                      填入示例链接
+                    </button>
+                    {editSourceUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setEditSourceUrl("")}
+                        className="text-[11px] text-[#8a95a5] hover:text-red-500"
+                      >
+                        清空
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="flex h-10 items-center gap-2 rounded-lg border border-[#dce2ea] px-3 focus-within:border-[#6e96f4] focus-within:ring-2 focus-within:ring-[#3370ff]/10">
+                  <Link2 size={15} className="shrink-0 text-[#8390a2]" />
+                  <input
+                    type="url"
+                    value={editSourceUrl}
+                    onChange={(e) => setEditSourceUrl(e.target.value)}
+                    placeholder="https://segway-ninebot.feishu.cn/docx/..."
+                    className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-[#a6afbb]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-[#3d4859]">
+                    个人记录文本纪要 <span className="font-normal text-[#98a1af]">（可选，支持多行速记、口头决议或补充待办）</span>
+                  </label>
+                  <span className="text-[11px] text-[#9aa4b2]">
+                    {editPersonalNotes.length} 字
+                  </span>
+                </div>
+                <textarea
+                  rows={5}
+                  value={editPersonalNotes}
+                  onChange={(e) => setEditPersonalNotes(e.target.value)}
+                  placeholder="可粘贴或修改个人在会议中记录的要点、口头决议、补充待办或风险提示..."
+                  className="w-full rounded-lg border border-[#dce2ea] p-3 text-xs outline-none placeholder:text-[#a6afbb] focus:border-[#6e96f4] focus:ring-2 focus:ring-[#3370ff]/10 leading-relaxed resize-y font-sans"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-[#3d4859] mb-1">
+                  会议系列名称 <span className="font-normal text-[#98a1af]">（可选）</span>
+                </label>
+                <input
+                  type="text"
+                  value={editSeriesName}
+                  onChange={(e) => setEditSeriesName(e.target.value)}
+                  placeholder="例如：FEB 前端周会、技术方案评审"
+                  className="h-9 w-full rounded-lg border border-[#dce2ea] px-3 text-xs outline-none focus:border-[#6e96f4]"
+                />
+              </div>
+
+              <div className="rounded-lg border border-amber-200/60 bg-amber-50/50 p-2.5 text-xs text-[#7d5e2a] leading-relaxed">
+                💡 <strong>重新生成提示：</strong>将根据修改后的文档链接或速记文本重新运行 AI 分析并更新全部结论、TODO 和风险。
+              </div>
+
+              {editError && (
+                <div className="flex items-center gap-2 rounded-lg bg-red-50 p-2.5 text-xs text-red-700">
+                  <CircleAlert size={15} className="shrink-0" />
+                  <span>{editError}</span>
+                </div>
+              )}
+
+              <div className="mt-5 flex items-center justify-between border-t border-[#edf0f4] pt-4">
+                <button
+                  type="button"
+                  disabled={editSubmitting}
+                  onClick={() => setEditingMeeting(null)}
+                  className="h-9 rounded-lg border border-[#dfe4eb] px-4 text-xs font-medium text-[#566273] hover:bg-[#f7f8fa]"
+                >
+                  取消
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={editSubmitting || (!editSourceUrl.trim() && !editPersonalNotes.trim())}
+                    onClick={submitSaveOnly}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[#3370ff]/40 bg-[#f4f7fe] px-3.5 text-xs font-medium text-[#3370ff] hover:bg-[#ebf2fe] disabled:opacity-50 transition"
+                  >
+                    <Save size={14} />
+                    <span>仅保存修改</span>
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={editSubmitting || (!editSourceUrl.trim() && !editPersonalNotes.trim())}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-[#3370ff] px-4 text-xs font-medium text-white hover:bg-[#2864ed] disabled:opacity-60 shadow-sm"
+                  >
+                    {editSubmitting ? <LoaderCircle size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                    {editSubmitting ? "正在重新生成…" : "保存并重新生成"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function MeetingRow({ meeting }: { meeting: MeetingAnalysis }) {
+function MeetingRow({
+  meeting,
+  onEdit,
+}: {
+  meeting: MeetingAnalysis;
+  onEdit: () => void;
+}) {
   const meta = statusMeta[meeting.status];
   const outstanding = meeting.actionItems?.filter((item) => item.status !== "completed").length || 0;
   const decisionsCount = meeting.decisions?.length || 0;
@@ -674,7 +932,20 @@ function MeetingRow({ meeting }: { meeting: MeetingAnalysis }) {
           </span>
         </div>
       </div>
-      <div className="flex items-center justify-between gap-6 md:justify-end">
+      <div className="flex items-center justify-between gap-4 md:justify-end">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onEdit();
+          }}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-[#d2d9e4] bg-white px-2.5 text-xs font-medium text-[#445266] hover:bg-[#f2f4f7] hover:text-[#3370ff] hover:border-[#3370ff]/40 transition shadow-xs"
+          title="编辑会议输入并重新生成"
+        >
+          <FileEdit size={13} className="text-[#3370ff]" />
+          <span>编辑 / 重新生成</span>
+        </button>
         <div className="text-right">
           <p className={`text-lg font-semibold ${outstanding ? "text-[#d18418]" : "text-[#1a9a6b]"}`}>
             {outstanding}
