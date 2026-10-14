@@ -8,10 +8,13 @@ import { buildMeetingInteractiveCard } from "@/lib/meeting/bot-card";
 const sendSchema = z.object({
   botId: z.string().optional(),
   customWebhook: z.string().trim().url().optional().or(z.literal("")),
-  introText: z.string().trim().max(1000).optional(),
-  includeDecisions: z.boolean().optional().default(true),
-  includeActionItems: z.boolean().optional().default(true),
-  includeRisks: z.boolean().optional().default(true),
+  introText: z.string().trim().max(2000).optional(),
+  tableUrl: z.string().trim().url().optional().or(z.literal("")),
+  tableName: z.string().trim().max(100).optional(),
+  cardMode: z.enum(["table_link_only", "full"]).optional().default("table_link_only"),
+  includeDecisions: z.boolean().optional().default(false),
+  includeActionItems: z.boolean().optional().default(false),
+  includeRisks: z.boolean().optional().default(false),
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -43,6 +46,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
 
     const payload = buildMeetingInteractiveCard(meeting, {
       introText: input.introText,
+      tableUrl: input.tableUrl,
+      tableName: input.tableName,
+      cardMode: input.cardMode,
       includeDecisions: input.includeDecisions,
       includeActionItems: input.includeActionItems,
       includeRisks: input.includeRisks,
