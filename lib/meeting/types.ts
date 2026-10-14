@@ -68,6 +68,8 @@ export interface MeetingExportOptions {
   includeDecisions?: boolean;
   includeActionItems?: boolean;
   includeRisks?: boolean;
+  createNewTab?: boolean;
+  tabName?: string;
 }
 
 export interface MeetingPromptTemplate {

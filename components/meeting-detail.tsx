@@ -90,10 +90,20 @@ export function MeetingDetail({
   const [includeDecisions, setIncludeDecisions] = useState(true);
   const [includeActionItems, setIncludeActionItems] = useState(true);
   const [includeRisks, setIncludeRisks] = useState(true);
+  const [createNewTab, setCreateNewTab] = useState(false);
+  const [tabName, setTabName] = useState("");
   const [exporting, setExporting] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [exportError, setExportError] = useState("");
   const [notice, setNotice] = useState("");
+
+  function openExportModal() {
+    if (!tabName) {
+      const datePart = (meeting.meetingDate || meeting.createdAt || "").slice(0, 10);
+      setTabName(`${datePart} ${meeting.title || "会议行动项"}`.trim());
+    }
+    setExportOpen(true);
+  }
 
   // 机器人卡片预览与发送状态
   const [botModalOpen, setBotModalOpen] = useState(false);
@@ -236,6 +246,8 @@ export function MeetingDetail({
           includeDecisions,
           includeActionItems,
           includeRisks,
+          createNewTab,
+          tabName: createNewTab ? tabName : undefined,
         }),
       });
       const body = (await response.json()) as {
@@ -302,7 +314,7 @@ export function MeetingDetail({
               </button>
               <button
                 disabled={meeting.status !== "completed"}
-                onClick={() => setExportOpen(true)}
+                onClick={openExportModal}
                 className="inline-flex h-9 shrink-0 items-center gap-2 rounded-lg bg-[#3370ff] px-3.5 text-sm font-medium text-white shadow-sm hover:bg-[#2864ed] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Table2 size={16} /> 导出到多维表格
@@ -662,7 +674,7 @@ export function MeetingDetail({
                       </div>
                     </div>
                     <button
-                      onClick={() => setExportOpen(true)}
+                      onClick={openExportModal}
                       className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-[#3370ff] py-2.5 text-sm font-medium text-white hover:bg-[#2864ed]"
                     >
                       <Send size={15} /> 导出到多维表格
@@ -1070,6 +1082,73 @@ export function MeetingDetail({
               <p className="mt-2 text-[11px] text-[#8c97a8]">
                 预计共导出 {totalExportItems} 条结构化记录到目标表格。
               </p>
+            </div>
+
+            {/* 写入模式单选 */}
+            <div className="mt-4 rounded-xl border border-[#e5e9f2] bg-[#f9fafc] p-3.5">
+              <p className="text-xs font-semibold text-[#546274] mb-2">多维表格写入模式：</p>
+              <div className="space-y-2">
+                <label className="flex items-start gap-2.5 cursor-pointer rounded-lg bg-white p-2.5 border border-[#e1e6ed] transition-colors hover:border-[#3370ff]/40">
+                  <input
+                    type="radio"
+                    name="exportMode"
+                    checked={!createNewTab}
+                    onChange={() => setCreateNewTab(false)}
+                    className="mt-0.5 text-[#3370ff] focus:ring-[#3370ff]"
+                  />
+                  <div>
+                    <div className="text-xs font-semibold text-[#2d3748] flex items-center gap-1.5">
+                      <span>追加到当前汇总数据表</span>
+                      <span className="rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">推荐</span>
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-[#718096] leading-relaxed">
+                      集中沉淀在同一表中，带「开会日期」字段，方便多维表格视图分组与后续<strong>跨多次会议风险评估</strong>。
+                    </p>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-2.5 cursor-pointer rounded-lg bg-white p-2.5 border border-[#e1e6ed] transition-colors hover:border-[#3370ff]/40">
+                  <input
+                    type="radio"
+                    name="exportMode"
+                    checked={createNewTab}
+                    onChange={() => {
+                      setCreateNewTab(true);
+                      if (!tabName) {
+                        const datePart = (meeting.meetingDate || meeting.createdAt || "").slice(0, 10);
+                        setTabName(`${datePart} ${meeting.title || "会议行动项"}`.trim());
+                      }
+                    }}
+                    className="mt-0.5 text-[#3370ff] focus:ring-[#3370ff]"
+                  />
+                  <div className="flex-1">
+                    <div className="text-xs font-semibold text-[#2d3748]">
+                      在多维表格中新建独立 Tab
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-[#718096] leading-relaxed">
+                      将在目标多维表格自动创建新工作表（Tab），单次会议独立隔离。
+                    </p>
+                    {createNewTab && (
+                      <div className="mt-2.5">
+                        <label className="block text-[11px] font-medium text-[#4a5568]">新 Tab 名称：</label>
+                        <input
+                          type="text"
+                          required={createNewTab}
+                          value={tabName}
+                          onChange={(e) => setTabName(e.target.value)}
+                          placeholder="例如：2026-10-14 需求对齐会"
+                          className="mt-1 h-8 w-full rounded border border-[#cbd5e1] px-2.5 text-xs outline-none focus:border-[#3370ff]"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </label>
+              </div>
+
+              <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-[#2b6cb0] bg-blue-50/70 rounded-md px-2.5 py-1.5">
+                <Sparkles size={13} className="shrink-0 text-[#3182ce]" />
+                <span>已启用<strong>文字简要化</strong>：结论、任务与风险标题控制在 40~60 字以内，清爽干练。</span>
+              </div>
             </div>
 
             <label className="mt-5 block text-sm font-medium text-[#3e4959]">

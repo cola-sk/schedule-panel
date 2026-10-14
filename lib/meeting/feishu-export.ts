@@ -65,6 +65,23 @@ async function resolveTable(targetUrl: string) {
   return { appToken, tableId, tableName };
 }
 
+async function createNewTableTab(appToken: string, tabName: string) {
+  const safeName = tabName.replace(/[:\\/?*\[\]]/g, "_").slice(0, 30) || "会议行动记录";
+  const createRes = await request<{ table_id?: string }>({
+    url: `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables`,
+    method: "POST",
+    data: {
+      table: {
+        name: safeName,
+      },
+    },
+  });
+  if (!createRes?.table_id) {
+    throw new Error(`在多维表格中创建新 Tab「${safeName}」失败`);
+  }
+  return { tableId: createRes.table_id, tableName: safeName };
+}
+
 async function ensureTableFields(appToken: string, tableId: string) {
   const data = await request<{ items?: BitableField[] }>({
     url: `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/fields?page_size=100`,
@@ -101,7 +118,7 @@ async function ensureTableFields(appToken: string, tableId: string) {
       });
       existingNames.add(field.name);
     } catch {
-      // 若无新增字段权限或并发冲突，忽略并尽可能继续
+      // 忽略字段创建错误（如并发或已有）
     }
   }
 
@@ -122,6 +139,16 @@ function formatMeetingDateOnly(dateStr?: string) {
   return dateStr;
 }
 
+/**
+ * 文本精简辅助函数：去除无意义换行与多余空格，并控制最大长度，使多维表格单元格清爽简要
+ */
+function conciseText(str?: string, maxLen = 60): string {
+  if (!str) return "";
+  const cleaned = str.replace(/[\r\n\t]+/g, " ").replace(/\s+/g, " ").trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return `${cleaned.slice(0, maxLen - 1)}…`;
+}
+
 export async function exportMeetingActions(
   meeting: MeetingAnalysis,
   optionsOrUrl: string | MeetingExportOptions,
@@ -130,36 +157,65 @@ export async function exportMeetingActions(
 
   const options: MeetingExportOptions =
     typeof optionsOrUrl === "string"
-      ? { targetUrl: optionsOrUrl, includeDecisions: true, includeActionItems: true, includeRisks: true }
+      ? {
+          targetUrl: optionsOrUrl,
+          includeDecisions: true,
+          includeActionItems: true,
+          includeRisks: true,
+          createNewTab: false,
+        }
       : {
           includeDecisions: true,
           includeActionItems: true,
           includeRisks: true,
+          createNewTab: false,
           ...optionsOrUrl,
         };
 
-  const { appToken, tableId, tableName } = await resolveTable(options.targetUrl);
+  const client = getFeishuClient();
+  const resolvedTarget = await resolveDocumentTarget(client, options.targetUrl);
+  if (resolvedTarget.objType !== "bitable" || !resolvedTarget.token) {
+    throw new Error("请输入有效的飞书多维表格链接（支持 /base/、/bitable/ 或知识库 Wiki 下的多维表格页面）");
+  }
+
+  const appToken = resolvedTarget.token;
+  const meetingDateStr = formatMeetingDateOnly(meeting.meetingDate || meeting.createdAt);
+
+  let tableId: string;
+  let tableName: string;
+
+  if (options.createNewTab) {
+    const defaultTabName = `${meetingDateStr || "会议"} ${conciseText(meeting.title, 14)}`;
+    const tabName = options.tabName?.trim() || defaultTabName;
+    const newTab = await createNewTableTab(appToken, tabName);
+    tableId = newTab.tableId;
+    tableName = newTab.tableName;
+  } else {
+    const resolved = await resolveTable(options.targetUrl);
+    tableId = resolved.tableId;
+    tableName = resolved.tableName;
+  }
+
   const { primaryField, existingFields } = await ensureTableFields(appToken, tableId);
 
   const statusLabels = { pending: "待推进", in_progress: "进行中", completed: "已完成" } as const;
   const riskLevelLabels = { low: "低", medium: "中", high: "高" } as const;
-  const meetingDateStr = formatMeetingDateOnly(meeting.meetingDate || meeting.createdAt);
   const sourceLink = meeting.sourceUrl || (meeting.personalNotes ? "个人记录文本纪要" : "无链接");
 
   const rawRecords: Array<Record<string, unknown>> = [];
 
-  // 1. 结论 (Decisions)
+  // 1. 结论 (Decisions) - 文字精简
   if (options.includeDecisions !== false && meeting.decisions?.length) {
     for (const item of meeting.decisions) {
       rawRecords.push({
-        [primaryField]: item.detail ? `【结论】${item.title}：${item.detail}` : item.title,
+        [primaryField]: conciseText(item.title, 50),
         类别: "结论",
         开会日期: meetingDateStr,
-        会议名称: meeting.title,
+        会议名称: conciseText(meeting.title, 40),
         责任人: "",
         风险等级: "",
         截止时间: "",
-        "交付物/应对措施": item.detail,
+        "交付物/应对措施": conciseText(item.detail, 80),
         影响范围: "",
         状态: "已达成",
         原文引用: item.quote,
@@ -169,19 +225,19 @@ export async function exportMeetingActions(
     }
   }
 
-  // 2. TODO / 行动项 (Action Items)
+  // 2. TODO / 行动项 (Action Items) - 文字精简
   if (options.includeActionItems !== false && meeting.actionItems?.length) {
     for (const item of meeting.actionItems) {
-      const owner = item.who.email ? `${item.who.name} <${item.who.email}>` : item.who.name;
+      const owner = item.who.name || "未指定";
       rawRecords.push({
-        [primaryField]: item.what,
+        [primaryField]: conciseText(item.what, 60),
         类别: "TODO",
         开会日期: meetingDateStr,
-        会议名称: meeting.title,
+        会议名称: conciseText(meeting.title, 40),
         责任人: owner,
         风险等级: "",
         截止时间: item.dueAt ? formatMeetingDateOnly(item.dueAt) : "未定",
-        "交付物/应对措施": item.deliverable,
+        "交付物/应对措施": conciseText(item.deliverable, 60),
         影响范围: "",
         状态: statusLabels[item.status] || "待推进",
         原文引用: item.quote,
@@ -191,19 +247,19 @@ export async function exportMeetingActions(
     }
   }
 
-  // 3. 风险 (Risks)
+  // 3. 风险 (Risks) - 文字精简
   if (options.includeRisks !== false && meeting.risks?.length) {
     for (const item of meeting.risks) {
       rawRecords.push({
-        [primaryField]: item.title,
+        [primaryField]: conciseText(item.title, 50),
         类别: "风险",
         开会日期: meetingDateStr,
-        会议名称: meeting.title,
+        会议名称: conciseText(meeting.title, 40),
         责任人: item.owner || "未指定",
         风险等级: riskLevelLabels[item.level] || item.level,
         截止时间: "",
-        "交付物/应对措施": item.mitigation,
-        影响范围: item.impact,
+        "交付物/应对措施": conciseText(item.mitigation, 80),
+        影响范围: conciseText(item.impact, 80),
         状态: "监控中",
         原文引用: item.quote,
         原文上下文: item.context,
@@ -216,7 +272,7 @@ export async function exportMeetingActions(
     throw new Error("本次会议在所选范围内没有可导出的项（结论、TODO 或风险）");
   }
 
-  // 过滤仅保留多维表格中实际存在的列（除了主字段保证写入）
+  // 仅写入目标表实际存在的列
   const records = rawRecords.map((item) => {
     const fields: Record<string, unknown> = {
       [primaryField]: item[primaryField],

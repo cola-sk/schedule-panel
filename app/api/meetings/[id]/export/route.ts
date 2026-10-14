@@ -14,6 +14,8 @@ const exportSchema = z.object({
   includeDecisions: z.boolean().optional().default(true),
   includeActionItems: z.boolean().optional().default(true),
   includeRisks: z.boolean().optional().default(true),
+  createNewTab: z.boolean().optional().default(false),
+  tabName: z.string().trim().max(100).optional(),
 });
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
