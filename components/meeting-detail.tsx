@@ -187,7 +187,7 @@ export function MeetingDetail({
     if (!botTableName) setBotTableName(initialTableName);
 
     const dateStr = meeting.meetingDate ? meeting.meetingDate.slice(0, 10) : formatDate(meeting.createdAt);
-    const defaultIntro = `各位同学，${dateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
+    const defaultIntro = `各位同学，${dateStr}「${meeting.title}」的会议纪要与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
     if (
       !botIntroText ||
       botIntroText.includes("已汇总更新至飞书多维表格") ||
@@ -404,7 +404,7 @@ export function MeetingDetail({
       if (!response.ok || !data.meeting) throw new Error(data.error || "重新生成失败");
       setMeeting(data.meeting);
       setEditModalOpen(false);
-      setNotice("🎉 会议结论与行动项已根据最新输入成功重新生成！");
+      setNotice("🎉 会议纪要与行动项已根据最新输入成功重新生成！");
       window.setTimeout(() => setNotice(""), 3500);
     } catch (err: any) {
       setEditError(err.message || "重新生成失败");
@@ -601,7 +601,7 @@ export function MeetingDetail({
                 <Metric
                   icon={<BadgeCheck size={18} />}
                   count={meeting.decisions?.length || 0}
-                  label="核心结论 / 决议"
+                  label="核心会议纪要"
                   tone="green"
                 />
                 <Metric
@@ -621,12 +621,12 @@ export function MeetingDetail({
               {/* 核心内容网格 */}
               <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,.85fr)]">
                 <div className="space-y-5">
-                  {/* 1. 核心结论 (Decisions) */}
+                  {/* 1. 会议纪要 (Decisions/Minutes) */}
                   <section className="overflow-hidden rounded-xl border border-[#d6e3f8] bg-white">
                     <SectionHeader
                       icon={<BadgeCheck size={17} className="text-emerald-600" />}
-                      title="核心结论 · Decisions"
-                      description="会上明确敲定、达成共识的技术决策与业务认定。"
+                      title="会议纪要 · Minutes"
+                      description="会上讨论明确的关键事项、决策与业务认定。"
                       count={meeting.decisions?.length || 0}
                     />
                     {meeting.decisions?.length ? (
@@ -638,7 +638,7 @@ export function MeetingDetail({
                           >
                             <div>
                               <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
-                                <BadgeCheck size={14} /> 已达成共识
+                                <BadgeCheck size={14} /> 关键纪要
                               </div>
                               <h3 className="mt-2 text-sm font-semibold text-[#2c3647]">{decision.title}</h3>
                               <p className="mt-1.5 text-xs leading-5 text-[#637286]">{decision.detail}</p>
@@ -652,7 +652,7 @@ export function MeetingDetail({
                         ))}
                       </div>
                     ) : (
-                      <EmptySection text="原文中没有识别到明确拍板的决议事项。" />
+                      <EmptySection text="原文中没有识别到明确的会议纪要事项。" />
                     )}
                   </section>
 
@@ -753,7 +753,7 @@ export function MeetingDetail({
                       <SectionHeader
                         icon={<CircleAlert size={17} />}
                         title="分歧 / 留存项"
-                        description="需要继续拉齐、仍未形成结论的事项。"
+                        description="需要继续拉齐、仍未达成一致的事项。"
                         count={meeting.openQuestions.length}
                       />
                       <div className="space-y-4 px-5 pb-5">
@@ -824,7 +824,7 @@ export function MeetingDetail({
                       <div>
                         <h3 className="font-semibold text-[#294675]">输出到飞书多维表格</h3>
                         <p className="mt-1 text-xs leading-5 text-[#667d9f]">
-                          按照结论、TODO、风险结构化输出，表格已精炼优化。
+                          按照会议纪要、TODO、风险结构化输出，表格已精炼优化。
                         </p>
                       </div>
                     </div>
@@ -943,7 +943,7 @@ export function MeetingDetail({
                         type="button"
                         onClick={() => {
                           const dateStr = meeting.meetingDate ? meeting.meetingDate.slice(0, 10) : formatDate(meeting.createdAt);
-                          setBotIntroText(`各位同学，${dateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`);
+                          setBotIntroText(`各位同学，${dateStr}「${meeting.title}」的会议纪要与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`);
                         }}
                         className="text-[11px] text-[#3370ff] hover:underline"
                       >
@@ -1090,7 +1090,7 @@ export function MeetingDetail({
               <div>
                 <h2 className="text-lg font-semibold">导出到飞书多维表格</h2>
                 <p className="mt-1 text-sm text-[#798597]">
-                  精简格式化输出结论、TODO、风险等核心项（已去除会议类别与日期列）。
+                  精简格式化输出会议纪要、TODO、风险等核心项（已去除会议类别与日期列）。
                 </p>
               </div>
               <button
@@ -1114,7 +1114,7 @@ export function MeetingDetail({
                     onChange={(e) => setIncludeDecisions(e.target.checked)}
                     className="rounded text-[#3370ff]"
                   />
-                  <span>结论 ({meeting.decisions?.length || 0})</span>
+                  <span>会议纪要 ({meeting.decisions?.length || 0})</span>
                 </label>
                 <label className="flex items-center gap-2 text-xs font-medium text-[#2d3748] cursor-pointer bg-white px-2.5 py-2 rounded-lg border border-[#e1e6ed]">
                   <input
@@ -1203,7 +1203,7 @@ export function MeetingDetail({
 
               <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-[#2b6cb0] bg-blue-50/70 rounded-md px-2.5 py-1.5">
                 <Sparkles size={13} className="shrink-0 text-[#3182ce]" />
-                <span>已启用<strong>文字简要化</strong>：结论、任务与风险标题控制在 40~60 字以内，清爽干练。</span>
+                <span>已启用<strong>文字简要化</strong>：纪要、任务与风险标题控制在 40~60 字以内，清爽干练。</span>
               </div>
             </div>
 
@@ -1275,7 +1275,7 @@ export function MeetingDetail({
                 <div>
                   <h2 className="text-lg font-semibold text-[#1f2735]">编辑会议纪要与重新生成</h2>
                   <p className="mt-0.5 text-xs text-[#718096]">
-                    修改飞书会议文档链接或个人速记文本，重新提炼结论、TODO与风险
+                    修改飞书会议文档链接或个人速记文本，重新提炼会议纪要、TODO与风险
                   </p>
                 </div>
               </div>
@@ -1354,7 +1354,7 @@ export function MeetingDetail({
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="block text-xs font-semibold text-[#3d4859]">
-                    个人记录文本纪要 <span className="font-normal text-[#98a1af]">（可选，支持多行速记、口头结论或补充说明）</span>
+                    个人记录文本纪要 <span className="font-normal text-[#98a1af]">（可选，支持多行速记、口头纪要或补充说明）</span>
                   </label>
                   <span className="text-[11px] text-[#9aa4b2]">
                     {editPersonalNotes.length} 字
@@ -1385,7 +1385,7 @@ export function MeetingDetail({
 
               {/* 提示信息 */}
               <div className="rounded-lg border border-amber-200/60 bg-amber-50/50 p-2.5 text-xs text-[#7d5e2a] leading-relaxed">
-                💡 <strong>生成提示：</strong>点击「保存并重新生成」将调用大模型重新解析最新文档和速记，刷新结论、TODO、风险和开会日期。已导出的多维表格历史不受影响。
+                💡 <strong>生成提示：</strong>点击「保存并重新生成」将调用大模型重新解析最新文档和速记，刷新会议纪要、TODO、风险和开会日期。已导出的多维表格历史不受影响。
               </div>
 
               {editError && (

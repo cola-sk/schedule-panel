@@ -147,7 +147,7 @@ function normalizeRiskLevel(value: unknown): MeetingRiskLevel {
 
 function normalizeModelOutput(value: unknown, fallbackTitle: string) {
   const root = isRecord(value) ? value : {};
-  const rawDecisions = valueAt(root, "decisions", "decisionsMade", "decisions_made", "决议项");
+  const rawDecisions = valueAt(root, "decisions", "decisionsMade", "decisions_made", "决议项", "会议纪要", "纪要", "纪要项", "结论");
   const rawQuestions = valueAt(root, "openQuestions", "open_questions", "blockers", "分歧留存项");
   const rawProgressItems = valueAt(root, "progressItems", "progress_items", "progress", "updates", "进展项");
   const rawRisks = valueAt(root, "risks", "riskItems", "risk_items", "风险项", "阻塞项");
@@ -155,8 +155,8 @@ function normalizeModelOutput(value: unknown, fallbackTitle: string) {
 
   const decisions = recordList(rawDecisions).flatMap((item) => {
     const evidence = normalizeEvidence(item);
-    const title = textValue(valueAt(item, "title", "decisionTitle", "decision_title", "topic", "subject", "决议"), 150);
-    const detail = textValue(valueAt(item, "detail", "description", "decision", "conclusion", "content", "rationale", "结论"), 800);
+    const title = textValue(valueAt(item, "title", "decisionTitle", "decision_title", "topic", "subject", "决议", "纪要", "主题", "结论"), 150);
+    const detail = textValue(valueAt(item, "detail", "description", "decision", "conclusion", "content", "rationale", "结论", "纪要内容", "纪要"), 800);
     const resolvedTitle = title || detail.slice(0, 80);
     const resolvedDetail = detail || title;
     return resolvedTitle && resolvedDetail && evidence.quote ? [{ title: resolvedTitle, detail: resolvedDetail, ...evidence }] : [];

@@ -239,14 +239,14 @@ export async function exportMeetingActions(
 
   const rawRecords: Array<Record<string, unknown>> = [];
 
-  // 1. 结论 (Decisions) - 文字精简
+  // 1. 会议纪要 (Minutes/Decisions) - 文字精简
   if (options.includeDecisions !== false && meeting.decisions?.length) {
     for (const item of meeting.decisions) {
       rawRecords.push({
         [primaryField]: conciseText(item.title, 50),
         "描述/补充": conciseText(item.detail, 80),
         "交付物/应对措施": conciseText(item.detail, 80),
-        类别: "结论",
+        类别: "会议纪要",
         会议名称: conciseText(meeting.title, 40),
         责任人: "",
         风险等级: "",
@@ -304,7 +304,7 @@ export async function exportMeetingActions(
   }
 
   if (!rawRecords.length) {
-    throw new Error("本次会议在所选范围内没有可导出的项（结论、TODO 或风险）");
+    throw new Error("本次会议在所选范围内没有可导出的项（会议纪要、TODO 或风险）");
   }
 
   // 仅写入目标表实际存在的列

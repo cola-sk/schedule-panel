@@ -152,7 +152,7 @@ export const DEFAULT_FEISHU_BITABLE_URL =
 export const meetingScenarioMeta: Record<MeetingScenario, { label: string; description: string }> = {
   meeting_action: {
     label: "会议行动闭环",
-    description: "结构化提取结论、TODO与潜在风险，精准识别开会日期",
+    description: "结构化提取会议纪要、TODO与潜在风险，精准识别开会日期",
   },
   technical_weekly: {
     label: "前端技术周会",
@@ -160,7 +160,7 @@ export const meetingScenarioMeta: Record<MeetingScenario, { label: string; descr
   },
   technical_review: {
     label: "技术方案评审",
-    description: "提取评审结论、待确定细节与后续 TODO",
+    description: "提取评审纪要、待确定细节与后续 TODO",
   },
 };
 

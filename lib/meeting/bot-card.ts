@@ -35,7 +35,7 @@ export function buildMeetingTextMessage(
     ? meeting.meetingDate.slice(0, 10)
     : formatDate(meeting.createdAt);
 
-  const defaultText = `各位同学，${meetingDateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
+  const defaultText = `各位同学，${meetingDateStr}「${meeting.title}」的会议纪要与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
   const textBody = options?.customText?.trim() || defaultText;
 
   // 纯文本消息：附带多维表格文档链接（若用户文案中未包含，则换行附带）
@@ -68,7 +68,7 @@ export function buildMeetingInteractiveCard(
     ? meeting.meetingDate.slice(0, 10)
     : formatDate(meeting.createdAt);
 
-  const defaultIntro = `各位同学，${meetingDateStr}「${meeting.title}」的会议结论与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
+  const defaultIntro = `各位同学，${meetingDateStr}「${meeting.title}」的会议纪要与TODO已汇总更新。请相关责任人关注并及时跟进，点击下方链接查看（内容是结合纪要和AI总结会议总结，如有遗漏或问题可编辑修改或评论）`;
   const textDescription = options?.introText?.trim() || defaultIntro;
 
   const elements: any[] = [];
@@ -84,7 +84,7 @@ export function buildMeetingInteractiveCard(
 
   elements.push({ tag: "hr" });
 
-  // 2. 结论对应的飞书表格文档与会议信息
+  // 2. 纪要对应的飞书表格文档与会议信息
   const fields: Array<{ is_short: boolean; text: { tag: "lark_md"; content: string } }> = [
     {
       is_short: true,
@@ -107,7 +107,7 @@ export function buildMeetingInteractiveCard(
     fields,
   });
 
-  // 3. 如果是完整展开模式 (full)，则追加具体结论/TODO/风险明细
+  // 3. 如果是完整展开模式 (full)，则追加具体纪要/TODO/风险明细
   if (cardMode === "full") {
     const includeDecisions = options?.includeDecisions !== false;
     const includeActionItems = options?.includeActionItems !== false;
@@ -124,7 +124,7 @@ export function buildMeetingInteractiveCard(
         tag: "div",
         text: {
           tag: "lark_md",
-          content: `**💡 核心结论 (${decisions.length})**\n${decisionLines.join("\n\n")}`,
+          content: `**💡 核心会议纪要 (${decisions.length})**\n${decisionLines.join("\n\n")}`,
         },
       });
     }
@@ -193,7 +193,7 @@ export function buildMeetingInteractiveCard(
         template: "blue",
         title: {
           tag: "plain_text",
-          content: `📋 会议结论已同步 · ${meeting.title}`,
+          content: `📋 会议纪要已同步 · ${meeting.title}`,
         },
       },
       elements,

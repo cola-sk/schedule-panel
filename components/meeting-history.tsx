@@ -250,7 +250,7 @@ export function MeetingHistory({
             <div>
               <h1 className="text-[17px] font-semibold tracking-[-0.02em]">会议行动</h1>
               <p className="mt-0.5 text-xs text-[#8a94a3]">
-                提取结论、TODO 与风险，支持识别开会日期与多维表格导出
+                提取会议纪要、TODO 与风险，支持识别开会日期与多维表格导出
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -346,7 +346,7 @@ export function MeetingHistory({
                 <p className="mt-2 max-w-sm text-sm leading-6 text-[#7c8798]">
                   {meetings.length
                     ? "换个关键词或筛选条件试试。"
-                    : "添加飞书会议链接或粘贴个人记录文本纪要，系统将提炼结论、TODO与风险。"}
+                    : "添加飞书会议链接或粘贴个人记录文本纪要，系统将提炼会议纪要、TODO与风险。"}
                 </p>
                 {!meetings.length && (
                   <button
@@ -813,7 +813,7 @@ export function MeetingHistory({
               </div>
 
               <div className="rounded-lg border border-amber-200/60 bg-amber-50/50 p-2.5 text-xs text-[#7d5e2a] leading-relaxed">
-                💡 <strong>重新生成提示：</strong>将根据修改后的文档链接或速记文本重新运行 AI 分析并更新全部结论、TODO 和风险。
+                💡 <strong>重新生成提示：</strong>将根据修改后的文档链接或速记文本重新运行 AI 分析并更新全部会议纪要、TODO 和风险。
               </div>
 
               {editError && (
@@ -920,7 +920,7 @@ function MeetingRow({
           </span>
           <span className="flex items-center gap-1.5">
             <BadgeCheck size={13} className="text-emerald-600" />
-            {decisionsCount} 结论
+            {decisionsCount} 纪要
           </span>
           <span className="flex items-center gap-1.5">
             <ListTodo size={13} className="text-blue-600" />
