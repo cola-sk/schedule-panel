@@ -91,20 +91,57 @@ async function ensureTableFields(appToken: string, tableId: string) {
   const primary = fields.find((field) => field.is_primary) || fields[0];
   if (!primary?.field_name) throw new Error("目标数据表缺少主字段");
 
+  const existingNames = new Set(fields.map((field) => field.field_name).filter(Boolean));
+
+  // 1. 如果第一列（主字段）名称为默认占位名（如“文本”、“多行文本”、“字段 1”），尝试命名为“标题”
+  if (
+    primary.field_id &&
+    (primary.field_name === "文本" ||
+      primary.field_name === "多行文本" ||
+      primary.field_name === "字段 1")
+  ) {
+    try {
+      await request({
+        url: `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/fields/${primary.field_id}`,
+        method: "PUT",
+        data: { field_name: "标题", type: primary.type || 1 },
+      });
+      primary.field_name = "标题";
+    } catch {
+      // 忽略重命名错误
+    }
+  }
+
+  // 2. 如果存在旧的“交付物/应对措施”列且没有“描述/补充”，尝试将其重命名为“描述/补充”
+  const oldField = fields.find((f) => f.field_name === "交付物/应对措施");
+  if (oldField?.field_id && !existingNames.has("描述/补充")) {
+    try {
+      await request({
+        url: `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/fields/${oldField.field_id}`,
+        method: "PUT",
+        data: { field_name: "描述/补充", type: oldField.type || 1 },
+      });
+      existingNames.delete("交付物/应对措施");
+      existingNames.add("描述/补充");
+    } catch {
+      // 忽略重命名错误
+    }
+  }
+
+  // 3. 列顺序配置：第一列[标题]后面紧跟[描述/补充]，随后是[类别]（用于分组）
   const expectedFields: Array<{ name: string; type: number }> = [
-    { name: "会议名称", type: 1 },
+    { name: "描述/补充", type: 1 },
+    { name: "类别", type: 1 },
     { name: "责任人", type: 1 },
     { name: "风险等级", type: 1 },
     { name: "截止时间", type: 1 },
-    { name: "交付物/应对措施", type: 1 },
     { name: "影响范围", type: 1 },
     { name: "状态", type: 1 },
+    { name: "会议名称", type: 1 },
     { name: "原文引用", type: 1 },
     { name: "原文上下文", type: 1 },
     { name: "来源链接", type: 1 },
   ];
-
-  const existingNames = new Set(fields.map((field) => field.field_name).filter(Boolean));
 
   for (const field of expectedFields) {
     if (field.name === primary.field_name || existingNames.has(field.name)) continue;
@@ -207,11 +244,13 @@ export async function exportMeetingActions(
     for (const item of meeting.decisions) {
       rawRecords.push({
         [primaryField]: conciseText(item.title, 50),
+        "描述/补充": conciseText(item.detail, 80),
+        "交付物/应对措施": conciseText(item.detail, 80),
+        类别: "结论",
         会议名称: conciseText(meeting.title, 40),
         责任人: "",
         风险等级: "",
         截止时间: "",
-        "交付物/应对措施": conciseText(item.detail, 80),
         影响范围: "",
         状态: "已达成",
         原文引用: item.quote,
@@ -227,11 +266,13 @@ export async function exportMeetingActions(
       const owner = item.who.name || "未指定";
       rawRecords.push({
         [primaryField]: conciseText(item.what, 60),
+        "描述/补充": conciseText(item.deliverable, 80),
+        "交付物/应对措施": conciseText(item.deliverable, 80),
+        类别: "TODO",
         会议名称: conciseText(meeting.title, 40),
         责任人: owner,
         风险等级: "",
         截止时间: item.dueAt ? formatMeetingDateOnly(item.dueAt) : "未定",
-        "交付物/应对措施": conciseText(item.deliverable, 60),
         影响范围: "",
         状态: statusLabels[item.status] || "待推进",
         原文引用: item.quote,
@@ -246,11 +287,13 @@ export async function exportMeetingActions(
     for (const item of meeting.risks) {
       rawRecords.push({
         [primaryField]: conciseText(item.title, 50),
+        "描述/补充": conciseText(item.mitigation, 80),
+        "交付物/应对措施": conciseText(item.mitigation, 80),
+        类别: "风险",
         会议名称: conciseText(meeting.title, 40),
         责任人: item.owner || "未指定",
         风险等级: riskLevelLabels[item.level] || item.level,
         截止时间: "",
-        "交付物/应对措施": conciseText(item.mitigation, 80),
         影响范围: conciseText(item.impact, 80),
         状态: "监控中",
         原文引用: item.quote,
@@ -283,6 +326,17 @@ export async function exportMeetingActions(
       method: "POST",
       data: { records: records.slice(index, index + 500) },
     });
+  }
+
+  // 尝试为数据表创建一个名为“按类别分组”的视图（若尚未存在）
+  try {
+    await request({
+      url: `https://open.feishu.cn/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/views`,
+      method: "POST",
+      data: { view_name: "按类别分组", view_type: "grid" },
+    });
+  } catch {
+    // 忽略视图已存在或权限限制
   }
 
   return {
