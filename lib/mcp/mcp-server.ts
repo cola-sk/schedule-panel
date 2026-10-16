@@ -7,6 +7,8 @@ import {
   updateDocumentContent,
   patchDocumentBlock,
   getDocumentInfo,
+  searchWiki,
+  listWikiSpaces,
 } from "./feishu-doc-engine";
 
 /**
@@ -267,6 +269,153 @@ export function createFeishuMcpServer(): McpServer {
             {
               type: "text",
               text: `修改飞书块内容失败: ${error.message || String(error)}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // 7. 在飞书知识库中检索文档
+  server.tool(
+    "feishu_search_wiki",
+    "在飞书知识库 (Wiki) 中检索文档，支持关键词搜索、限定特定空间或限定指定父目录/文件夹节点，返回匹配的文档列表（含标题、摘要、Wiki Token 及 URL），可直接配合 feishu_read_document 进行内容读取",
+    {
+      query: z
+        .string()
+        .describe("搜索关键词，例如：'前端规范'、'axios封装'、'微前端SDK'、'构建配置'、'eslint'"),
+      space_id: z
+        .string()
+        .optional()
+        .describe("知识库空间 ID 或空间链接。可选，若不指定则在所有有权限的知识空间中搜索"),
+      parent_node_token: z
+        .string()
+        .optional()
+        .describe("目标父目录/文件夹节点的 Wiki Token、节点 URL 或目录名称（如 '规范与标准'、'AZ5awBTNviWQvEkFIkIcjsYJnae'）。若指定，则仅在该目录及其子目录下递归检索，显著提升检索速度并避免全空间范围扫描"),
+      page_size: z
+        .number()
+        .min(1)
+        .max(50)
+        .default(10)
+        .optional()
+        .describe("返回结果数量，默认 10，最大 50"),
+    },
+    async ({ query, space_id, parent_node_token, page_size }) => {
+      try {
+        const result = await searchWiki(query, {
+          spaceId: space_id,
+          parentNodeToken: parent_node_token,
+          pageSize: page_size || 10,
+        });
+
+        if (result.total === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  result.message ||
+                  `未找到与 "${query}" 相关的飞书知识库文档。建议尝试更通用的关键词，或使用 feishu_list_wiki_spaces 检查可访问的知识库列表。`,
+              },
+            ],
+          };
+        }
+
+        const formattedList = result.items
+          .map((item, index) => {
+            const tokenStr = item.wikiToken
+              ? `wikiToken: \`${item.wikiToken}\``
+              : `documentId: \`${item.documentId}\``;
+            const summaryStr = item.summary ? `\n   - **摘要**: ${item.summary}` : "";
+            const spaceStr = item.spaceId ? ` (空间: \`${item.spaceId}\`)` : "";
+            const authorStr = item.ownerName ? ` | 作者: ${item.ownerName}` : "";
+
+            return `${index + 1}. **[${item.title}](${item.url})** [${item.objType}]${spaceStr}
+   - **标识**: ${tokenStr}${authorStr}${summaryStr}`;
+          })
+          .join("\n\n");
+
+        const dirStr = result.parentNodeToken ? ` | 限制目录: \`${result.parentNodeToken}\`` : "";
+        const textOutput = `### 飞书知识库检索结果（共 ${result.total} 条，来源: ${result.source}）
+检索词: "${query}"${result.spaceId ? ` | 空间 ID: \`${result.spaceId}\`` : ""}${dirStr}
+
+${formattedList}
+
+---
+💡 **后续操作指引**：可直接复制上述文档的 **URL** 或 **标识 Token**，调用 \`feishu_read_document\` 读取该文档的详细 Markdown 内容。`;
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: textOutput,
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `飞书知识库检索失败: ${error.message || String(error)}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  // 8. 列出当前有权限访问的知识库空间
+  server.tool(
+    "feishu_list_wiki_spaces",
+    "列出当前应用/机器人有权限访问的所有飞书知识库空间（Wiki Spaces），可用于获取目标知识库的 space_id",
+    {
+      page_size: z
+        .number()
+        .min(1)
+        .max(50)
+        .default(20)
+        .optional()
+        .describe("返回空间数量，默认 20，最大 50"),
+    },
+    async ({ page_size }) => {
+      try {
+        const result = await listWikiSpaces(page_size || 20);
+
+        if (result.spaces.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "当前自建应用/机器人暂未获得任何飞书知识库空间的访问权限。请前往飞书知识库的「空间设置 -> 成员管理」，将机器人添加为空间成员并授予阅读权限。",
+              },
+            ],
+          };
+        }
+
+        const list = result.spaces
+          .map(
+            (s, index) =>
+              `${index + 1}. **${s.name}** (Space ID: \`${s.spaceId}\`)${s.description ? `\n   - 描述: ${s.description}` : ""}`,
+          )
+          .join("\n");
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `### 当前可访问的飞书知识空间列表（共 ${result.spaces.length} 个）\n\n${list}\n\n💡 提示：在调用 \`feishu_search_wiki\` 时，可将目标知识库的 \`Space ID\` 作为 \`space_id\` 参数传入，以限定只在该知识库内精准搜索。`,
+            },
+          ],
+        };
+      } catch (error: any) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `获取知识库空间列表失败: ${error.message || String(error)}`,
             },
           ],
         };

@@ -14,7 +14,9 @@ function loadEnvFile(filePath: string) {
       if (eqIdx > 0) {
         const key = trimmed.slice(0, eqIdx).trim();
         const value = trimmed.slice(eqIdx + 1).trim();
-        process.env[key] = value.replace(/^["'](.*)["']$/, "$1");
+        if (!process.env[key]) {
+          process.env[key] = value.replace(/^["'](.*)["']$/, "$1");
+        }
       }
     }
   } catch {
@@ -1148,6 +1150,10 @@ export async function appendBitableRecords(
     finalTableId = tablesRes.data.items[0].table_id;
   }
 
+  if (!finalTableId) {
+    throw new Error("未找到多维表格中的可用数据表 ID");
+  }
+
   // 获取字段元信息
   let fields: Array<{ field_id: string; field_name: string; is_primary?: boolean }> = [];
   try {
@@ -1170,11 +1176,52 @@ export async function appendBitableRecords(
     };
   }
 
-  // 批量创建记录，单次上限 500 条
-  const BATCH_SIZE = 500;
+  // 检查现有记录，优先填充纯空白行（如新建表格时飞书自动生成的空行）
+  const blankRecordIds: string[] = [];
+  try {
+    const listRes = await client.bitable.appTableRecord.list({
+      path: { app_token: appToken, table_id: finalTableId },
+      params: { page_size: 100 },
+    });
+    if (listRes.code === 0 && listRes.data?.items) {
+      for (const item of listRes.data.items) {
+        const itemFields = item.fields || {};
+        const hasValue = Object.values(itemFields).some(
+          (v) => v !== null && v !== undefined && String(v).trim() !== "",
+        );
+        if (!hasValue && item.record_id) {
+          blankRecordIds.push(item.record_id);
+        }
+      }
+    }
+  } catch {}
+
   let totalAppended = 0;
-  for (let i = 0; i < recordsData.length; i += BATCH_SIZE) {
-    const batch = recordsData.slice(i, i + BATCH_SIZE).map((fieldsObj) => ({
+  const remainingRecords = [...recordsData];
+
+  // 1. 先填充现有的空白行
+  while (blankRecordIds.length > 0 && remainingRecords.length > 0) {
+    const targetRecordId = blankRecordIds.shift()!;
+    const fieldsObj = remainingRecords.shift()!;
+    try {
+      const updateRes = await client.bitable.appTableRecord.update({
+        path: { app_token: appToken, table_id: finalTableId, record_id: targetRecordId },
+        data: { fields: fieldsObj },
+      });
+      if (updateRes.code === 0) {
+        totalAppended += 1;
+      }
+    } catch {
+      // 若更新失败，放回并在后续批量新增
+      remainingRecords.unshift(fieldsObj);
+      break;
+    }
+  }
+
+  // 2. 剩余记录批量新增，单次上限 500 条
+  const BATCH_SIZE = 500;
+  for (let i = 0; i < remainingRecords.length; i += BATCH_SIZE) {
+    const batch = remainingRecords.slice(i, i + BATCH_SIZE).map((fieldsObj) => ({
       fields: fieldsObj,
     }));
 
@@ -1222,6 +1269,10 @@ export async function updateBitableRecords(
       throw new Error(formatLarkError(tablesRes, "读取多维表格数据表失败"));
     }
     finalTableId = tablesRes.data.items[0].table_id;
+  }
+
+  if (!finalTableId) {
+    throw new Error("未找到多维表格中的可用数据表 ID");
   }
 
   // 1. 获取现有所有记录的 record_id
@@ -1992,5 +2043,447 @@ export async function patchDocumentBlock(
     content: newContent,
     url: `https://open.feishu.cn/docx/${documentId}`,
     message: "块内容修改成功",
+  };
+}
+
+function getWikiObjTypeName(type: number | string): string {
+  switch (Number(type)) {
+    case 1:
+      return "doc";
+    case 2:
+      return "sheet";
+    case 3:
+      return "bitable";
+    case 4:
+      return "mindnote";
+    case 5:
+      return "file";
+    case 6:
+      return "slide";
+    case 7:
+      return "wiki";
+    case 8:
+      return "docx";
+    default:
+      return String(type || "unknown");
+  }
+}
+
+export interface WikiSpaceItem {
+  spaceId: string;
+  name: string;
+  description: string;
+  spaceType?: string;
+  visibility?: string;
+}
+
+/**
+ * 列出当前应用/机器人有权限访问的飞书知识库空间列表
+ */
+export async function listWikiSpaces(pageSize: number = 20): Promise<{
+  spaces: WikiSpaceItem[];
+  hasMore: boolean;
+}> {
+  const client = getFeishuClient();
+  try {
+    const res = await client.wiki.space.list({
+      params: {
+        page_size: pageSize,
+      },
+    });
+
+    if (res.code !== 0) {
+      throw new Error(formatLarkError(res, "获取知识库空间列表失败"));
+    }
+
+    const items = (res.data?.items || []).map((s: any) => ({
+      spaceId: s.space_id,
+      name: s.name,
+      description: s.description || "",
+      spaceType: s.space_type,
+      visibility: s.visibility,
+    }));
+
+    return {
+      spaces: items,
+      hasMore: Boolean(res.data?.has_more),
+    };
+  } catch (error: any) {
+    throw new Error(formatLarkError(error, "获取知识库空间列表失败"));
+  }
+}
+
+export interface WikiSearchItem {
+  wikiToken?: string;
+  documentId?: string;
+  title: string;
+  summary?: string;
+  url: string;
+  objType: string;
+  spaceId?: string;
+  ownerName?: string;
+  updateTime?: string;
+}
+
+export interface WikiSearchOutput {
+  query: string;
+  total: number;
+  hasMore: boolean;
+  spaceId?: string;
+  parentNodeToken?: string;
+  items: WikiSearchItem[];
+  source: string;
+  message?: string;
+}
+
+const spaceCatalogCache = new Map<string, { time: number; nodes: any[] }>();
+const CACHE_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * 在飞书知识库中搜索相关文档（支持限定 Space 或指定父目录节点）
+ */
+export async function searchWiki(
+  query: string,
+  options?: {
+    spaceId?: string;
+    parentNodeToken?: string;
+    pageSize?: number;
+  },
+): Promise<WikiSearchOutput> {
+  const client = getFeishuClient();
+  const trimmedQuery = query?.trim();
+  if (!trimmedQuery) {
+    throw new Error("搜索关键词不能为空");
+  }
+
+  let targetSpaceId = options?.spaceId?.trim() || process.env.FEISHU_WIKI_SPACE_ID?.trim();
+  const rawParentTokenStr =
+    options?.parentNodeToken?.trim() || process.env.FEISHU_WIKI_PARENT_NODE_TOKEN?.trim() || "";
+
+  const candidateParentTokens = rawParentTokenStr
+    ? rawParentTokenStr
+        .split(/[,，;；]/)
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : [];
+
+  // 1. 如果 targetSpaceId 传入的是 Wiki 空间或节点 URL，解析其中的 space_id
+  if (targetSpaceId && targetSpaceId.includes("/wiki/")) {
+    const spaceMatch = targetSpaceId.match(/\/wiki\/space\/([0-9a-zA-Z_-]+)/);
+    if (spaceMatch) {
+      targetSpaceId = spaceMatch[1];
+    } else {
+      const nodeMatch = targetSpaceId.match(/\/wiki\/([0-9a-zA-Z_-]+)/);
+      if (nodeMatch) {
+        try {
+          const nodeRes = await client.wiki.space.getNode({
+            params: { token: nodeMatch[1], obj_type: "wiki" },
+          });
+          if (nodeRes.data?.node?.space_id) {
+            targetSpaceId = nodeRes.data.node.space_id;
+          }
+        } catch {
+          // 容错忽略，继续使用原值
+        }
+      }
+    }
+  }
+
+  // 2. 校验并解析 candidateParentTokens（支持多个 Token、URL 以及目录名称匹配）
+  const resolvedParents: Array<{
+    token: string;
+    info?: { node_token: string; obj_token: string; title: string; obj_type: any };
+  }> = [];
+
+  for (const rawToken of candidateParentTokens) {
+    let cleanToken = rawToken;
+    if (cleanToken.includes("/wiki/")) {
+      const match = cleanToken.match(/\/wiki\/([0-9a-zA-Z_-]+)/);
+      if (match) cleanToken = match[1];
+    }
+
+    let nodeInfo: { node_token: string; obj_token: string; title: string; obj_type: any } | null = null;
+    try {
+      const nodeRes = await client.wiki.space.getNode({
+        params: { token: cleanToken, obj_type: "wiki" },
+      });
+      if (nodeRes.data?.node) {
+        if (!targetSpaceId && nodeRes.data.node.space_id) {
+          targetSpaceId = nodeRes.data.node.space_id;
+        }
+        nodeInfo = {
+          node_token: nodeRes.data.node.node_token || cleanToken,
+          obj_token: nodeRes.data.node.obj_token || "",
+          title: nodeRes.data.node.title || "",
+          obj_type: nodeRes.data.node.obj_type,
+        };
+      }
+    } catch {
+      // 容错忽略
+    }
+
+    // 若通过 Token 查询失败且已知 spaceId，尝试按标题在根节点中查找该目录
+    if (!nodeInfo && targetSpaceId) {
+      try {
+        const rootNodesRes = await client.wiki.spaceNode.list({
+          path: { space_id: targetSpaceId },
+          params: { page_size: 50 },
+        });
+        const rootItems = rootNodesRes.data?.items || [];
+        const matched = rootItems.find(
+          (item: any) =>
+            item.title?.toLowerCase() === cleanToken.toLowerCase() ||
+            item.title?.toLowerCase().includes(cleanToken.toLowerCase()),
+        );
+        if (matched && matched.node_token) {
+          cleanToken = matched.node_token;
+          nodeInfo = {
+            node_token: matched.node_token,
+            obj_token: matched.obj_token || "",
+            title: matched.title || "",
+            obj_type: matched.obj_type,
+          };
+        }
+      } catch {
+        // 容错忽略
+      }
+    }
+
+    resolvedParents.push({
+      token: cleanToken,
+      info: nodeInfo || undefined,
+    });
+  }
+
+  const pageSize = Math.min(Math.max(options?.pageSize || 10, 1), 50);
+
+  // 1. 若没有限定特定父目录，优先调用飞书官方搜索引擎 (search.v2.docWiki.search)
+  // （若指定了父目录，则直接走目录树检索，确保 100% 局限在该目录下并避免大范围扫描）
+  let searchApiNotice: string | undefined;
+  if (resolvedParents.length === 0) {
+    try {
+      const searchRes = await client.search.v2.docWiki.search({
+        data: {
+          query: trimmedQuery,
+          wiki_filter: targetSpaceId ? { space_ids: [targetSpaceId] } : undefined,
+          page_size: pageSize,
+        },
+      });
+
+      if (
+        searchRes.code === 0 &&
+        searchRes.data?.res_units &&
+        searchRes.data.res_units.length > 0
+      ) {
+        const items: WikiSearchItem[] = searchRes.data.res_units.map((unit: any) => {
+          const meta = unit.result_meta || {};
+          const rawTitle = unit.title_highlighted || meta.token || "无标题";
+          const cleanTitle = rawTitle.replace(/<[^>]+>/g, "").trim();
+          const rawSummary = unit.summary_highlighted || "";
+          const cleanSummary = rawSummary.replace(/<[^>]+>/g, "").trim();
+          const token = meta.token;
+          const isWiki = unit.entity_type === "WIKI" || meta.doc_types === "WIKI";
+
+          return {
+            wikiToken: isWiki ? token : undefined,
+            documentId: isWiki ? undefined : token,
+            title: cleanTitle,
+            summary: cleanSummary,
+            url:
+              meta.url ||
+              (token
+                ? isWiki
+                  ? `https://open.feishu.cn/wiki/${token}`
+                  : `https://open.feishu.cn/docx/${token}`
+                : ""),
+            objType: meta.doc_types || unit.entity_type || "docx",
+            ownerName: meta.owner_name,
+            updateTime: meta.update_time
+              ? new Date(meta.update_time * 1000).toLocaleString()
+              : undefined,
+          };
+        });
+
+        return {
+          query: trimmedQuery,
+          total: items.length,
+          hasMore: Boolean(searchRes.data.has_more),
+          spaceId: targetSpaceId,
+          items,
+          source: "doc_wiki_search",
+        };
+      }
+    } catch (error: any) {
+      const errMsg = formatLarkError(error, "调用飞书搜索引擎失败");
+      if (errMsg.includes("99991672") || errMsg.includes("search:docs:read")) {
+        const appId = process.env.FEISHU_APP_ID || "cli_aa1cf4558ef89ccd";
+        searchApiNotice = `提示：飞书官方搜索引擎 (search.v2.docWiki) 建议开通「search:docs:read」权限以获得全文深度检索：https://open.feishu.cn/app/${appId}/auth?q=search:docs:read&op_from=openapi&token_type=tenant`;
+      }
+    }
+  }
+
+  // 2. 知识空间节点树分词模糊匹配（作为平滑降级兜底）
+  try {
+    let spacesToSearch: string[] = [];
+    if (targetSpaceId) {
+      spacesToSearch = [targetSpaceId];
+    } else {
+      const spacesRes = await client.wiki.space.list({ params: { page_size: 20 } });
+      if (spacesRes.code === 0 && spacesRes.data?.items) {
+        spacesToSearch = spacesRes.data.items.map((s: any) => s.space_id);
+      }
+    }
+
+    const queryLower = trimmedQuery.toLowerCase();
+    // 动态提取用户输入中的核心词汇（英文单词、数字、去掉停用助词的中文片段）
+    const stopWords = /^(如何|怎样|怎么|请问|帮我|搜索|检索|查询|查找|找到|查看|配置|安装|接入|使用|关于|以及|和|与|的|了|在)+|(如何|怎样|怎么|请问|帮我|搜索|检索|查询|查找|找到|查看|配置|安装|接入|使用|关于|以及|和|与|的|了|在)+$/g;
+    const cleanZh = trimmedQuery.replace(stopWords, "").trim();
+    const tokens = Array.from(
+      new Set(
+        [
+          queryLower,
+          cleanZh.toLowerCase(),
+          ...(trimmedQuery.match(/[a-zA-Z0-9_.-]+/g) || []).map((w) => w.toLowerCase()),
+        ].filter((w) => w && w.length >= 2),
+      ),
+    );
+
+    const matchedItems: WikiSearchItem[] = [];
+
+    for (const spaceId of spacesToSearch) {
+      const spaceNodes: Array<{ node_token: string; obj_token: string; title: string; obj_type: any }> = [];
+
+      if (resolvedParents.length > 0) {
+        for (const parent of resolvedParents) {
+          const cacheKey = `${spaceId}:${parent.token}`;
+          const cached = spaceCatalogCache.get(cacheKey);
+
+          if (cached && Date.now() - cached.time < CACHE_TTL_MS) {
+            spaceNodes.push(...cached.nodes);
+          } else {
+            const collected: Array<{ node_token: string; obj_token: string; title: string; obj_type: any }> = [];
+            if (parent.info) {
+              collected.push(parent.info);
+            }
+
+            async function collectNodes(parentToken: string, depth = 0) {
+              if (depth > 6) return;
+              const nodesRes = await client.wiki.spaceNode.list({
+                path: { space_id: spaceId },
+                params: { parent_node_token: parentToken, page_size: 50 },
+              });
+              const items = nodesRes.data?.items || [];
+              for (const node of items) {
+                if (!node.node_token) continue;
+                collected.push({
+                  node_token: node.node_token,
+                  obj_token: node.obj_token || "",
+                  title: node.title || "",
+                  obj_type: node.obj_type,
+                });
+                if (node.has_child) {
+                  await collectNodes(node.node_token, depth + 1);
+                }
+              }
+            }
+
+            await collectNodes(parent.token);
+            spaceCatalogCache.set(cacheKey, { time: Date.now(), nodes: collected });
+            spaceNodes.push(...collected);
+          }
+        }
+      } else {
+        const cacheKey = `${spaceId}:root`;
+        const cached = spaceCatalogCache.get(cacheKey);
+        if (cached && Date.now() - cached.time < CACHE_TTL_MS) {
+          spaceNodes.push(...cached.nodes);
+        } else {
+          const collected: Array<{ node_token: string; obj_token: string; title: string; obj_type: any }> = [];
+          const isArchiveQuery = tokens.some((t) => /周报|上线|复盘|交接|报销/.test(t));
+
+          async function collectRootNodes(parentToken?: string, depth = 0) {
+            if (depth > 6) return;
+            const nodesRes = await client.wiki.spaceNode.list({
+              path: { space_id: spaceId },
+              params: { parent_node_token: parentToken, page_size: 50 },
+            });
+            const items = nodesRes.data?.items || [];
+            for (const node of items) {
+              if (!node.node_token) continue;
+              collected.push({
+                node_token: node.node_token,
+                obj_token: node.obj_token || "",
+                title: node.title || "",
+                obj_type: node.obj_type,
+              });
+              const isArchiveBranch = /周报|上线记录|绩效复盘|交接记录/.test(node.title || "");
+              if (node.has_child && (isArchiveQuery || !isArchiveBranch)) {
+                await collectRootNodes(node.node_token, depth + 1);
+              }
+            }
+          }
+
+          await collectRootNodes(undefined);
+          spaceCatalogCache.set(cacheKey, { time: Date.now(), nodes: collected });
+          spaceNodes.push(...collected);
+        }
+      }
+
+      // 去重
+      const seenTokens = new Set<string>();
+      const dedupedNodes = spaceNodes.filter((n) => {
+        if (seenTokens.has(n.node_token)) return false;
+        seenTokens.add(n.node_token);
+        return true;
+      });
+
+      for (const node of dedupedNodes) {
+        const title = node.title || "";
+        const titleLower = title.toLowerCase();
+        const isMatch = tokens.some((token) => titleLower.includes(token));
+        if (isMatch) {
+          matchedItems.push({
+            wikiToken: node.node_token,
+            documentId: node.obj_token,
+            title: title,
+            url: `https://open.feishu.cn/wiki/${node.node_token}`,
+            objType: getWikiObjTypeName(node.obj_type),
+            spaceId: spaceId,
+          });
+          if (matchedItems.length >= pageSize) break;
+        }
+      }
+
+      if (matchedItems.length >= pageSize) break;
+    }
+
+    const parentNodesSummary = resolvedParents.map((p) => p.token).join(",");
+
+    if (matchedItems.length > 0) {
+      return {
+        query: trimmedQuery,
+        total: matchedItems.length,
+        hasMore: false,
+        spaceId: targetSpaceId,
+        parentNodeToken: parentNodesSummary || undefined,
+        items: matchedItems,
+        source: resolvedParents.length > 0 ? "directory_nodes_title_match" : "space_tree_title_match",
+        message: searchApiNotice,
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  const parentNodesSummary = resolvedParents.map((p) => p.token).join(",");
+  return {
+    query: trimmedQuery,
+    total: 0,
+    hasMore: false,
+    spaceId: targetSpaceId,
+    parentNodeToken: parentNodesSummary || undefined,
+    items: [],
+    source: "none",
+    message: searchApiNotice || `在飞书知识库中未检索到与 "${trimmedQuery}" 匹配的文档`,
   };
 }

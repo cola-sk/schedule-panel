@@ -77,6 +77,14 @@ app.get("/health", (req: any, res: any) => {
         name: "feishu_get_document_info",
         description: "获取飞书文档的基本元信息（标题、版本等）",
       },
+      {
+        name: "feishu_search_wiki",
+        description: "在飞书知识库 (Wiki) 中检索文档，支持关键词搜索、空间筛选，返回匹配文档列表与 Token",
+      },
+      {
+        name: "feishu_list_wiki_spaces",
+        description: "列出当前应用/机器人有权限访问的所有飞书知识库空间（Wiki Spaces）",
+      },
     ],
   });
 });
