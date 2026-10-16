@@ -14,7 +14,9 @@ function loadEnvFile(filePath: string) {
       if (eqIdx > 0) {
         const key = trimmed.slice(0, eqIdx).trim();
         const value = trimmed.slice(eqIdx + 1).trim();
-        process.env[key] = value.replace(/^["'](.*)["']$/, "$1");
+        if (!process.env[key]) {
+          process.env[key] = value.replace(/^["'](.*)["']$/, "$1");
+        }
       }
     }
   } catch {
@@ -306,11 +308,45 @@ function elementsToMarkdown(elements?: Array<any>): string {
  */
 export function convertBlocksToMarkdown(blocks: Array<any>): string {
   const lines: string[] = [];
+  const blockById = new Map<string, any>(blocks.map((b) => [b.block_id, b]));
+  // 表格单元格内的子块由表格统一渲染，避免被拍平成独立段落
+  const consumed = new Set<string>();
+  const markConsumed = (id: string) => {
+    consumed.add(id);
+    for (const childId of blockById.get(id)?.children || []) markConsumed(childId);
+  };
 
   for (const block of blocks) {
+    if (consumed.has(block.block_id)) continue;
     const type = block.block_type;
     // block_type 1: page block (根块跳过)
     if (type === 1) continue;
+
+    // 31: table（单元格为 32，单元格内再嵌套文本块）
+    if (type === 31 && block.table?.cells) {
+      const columnSize = block.table.property?.column_size || 1;
+      const cellTexts: string[] = block.table.cells.map((cellId: string) => {
+        markConsumed(cellId);
+        const cell = blockById.get(cellId);
+        return (cell?.children || [])
+          .map((childId: string) => {
+            const child = blockById.get(childId);
+            return child ? convertBlocksToMarkdown([child]) : "";
+          })
+          .filter(Boolean)
+          .join("<br>")
+          .replace(/\n+/g, " ")
+          .replace(/\|/g, "\\|")
+          .trim();
+      });
+      const rows: string[] = [];
+      for (let i = 0; i < cellTexts.length; i += columnSize) {
+        rows.push(`| ${cellTexts.slice(i, i + columnSize).join(" | ")} |`);
+        if (i === 0) rows.push(`|${" --- |".repeat(columnSize)}`);
+      }
+      lines.push(rows.join("\n"));
+      continue;
+    }
 
     // 2: text (普通段落)
     if (type === 2 && block.text) {
@@ -1148,6 +1184,10 @@ export async function appendBitableRecords(
     finalTableId = tablesRes.data.items[0].table_id;
   }
 
+  if (!finalTableId) {
+    throw new Error("未找到多维表格中的可用数据表 ID");
+  }
+
   // 获取字段元信息
   let fields: Array<{ field_id: string; field_name: string; is_primary?: boolean }> = [];
   try {
@@ -1170,11 +1210,52 @@ export async function appendBitableRecords(
     };
   }
 
-  // 批量创建记录，单次上限 500 条
-  const BATCH_SIZE = 500;
+  // 检查现有记录，优先填充纯空白行（如新建表格时飞书自动生成的空行）
+  const blankRecordIds: string[] = [];
+  try {
+    const listRes = await client.bitable.appTableRecord.list({
+      path: { app_token: appToken, table_id: finalTableId },
+      params: { page_size: 100 },
+    });
+    if (listRes.code === 0 && listRes.data?.items) {
+      for (const item of listRes.data.items) {
+        const itemFields = item.fields || {};
+        const hasValue = Object.values(itemFields).some(
+          (v) => v !== null && v !== undefined && String(v).trim() !== "",
+        );
+        if (!hasValue && item.record_id) {
+          blankRecordIds.push(item.record_id);
+        }
+      }
+    }
+  } catch {}
+
   let totalAppended = 0;
-  for (let i = 0; i < recordsData.length; i += BATCH_SIZE) {
-    const batch = recordsData.slice(i, i + BATCH_SIZE).map((fieldsObj) => ({
+  const remainingRecords = [...recordsData];
+
+  // 1. 先填充现有的空白行
+  while (blankRecordIds.length > 0 && remainingRecords.length > 0) {
+    const targetRecordId = blankRecordIds.shift()!;
+    const fieldsObj = remainingRecords.shift()!;
+    try {
+      const updateRes = await client.bitable.appTableRecord.update({
+        path: { app_token: appToken, table_id: finalTableId, record_id: targetRecordId },
+        data: { fields: fieldsObj },
+      });
+      if (updateRes.code === 0) {
+        totalAppended += 1;
+      }
+    } catch {
+      // 若更新失败，放回并在后续批量新增
+      remainingRecords.unshift(fieldsObj);
+      break;
+    }
+  }
+
+  // 2. 剩余记录批量新增，单次上限 500 条
+  const BATCH_SIZE = 500;
+  for (let i = 0; i < remainingRecords.length; i += BATCH_SIZE) {
+    const batch = remainingRecords.slice(i, i + BATCH_SIZE).map((fieldsObj) => ({
       fields: fieldsObj,
     }));
 
@@ -1222,6 +1303,10 @@ export async function updateBitableRecords(
       throw new Error(formatLarkError(tablesRes, "读取多维表格数据表失败"));
     }
     finalTableId = tablesRes.data.items[0].table_id;
+  }
+
+  if (!finalTableId) {
+    throw new Error("未找到多维表格中的可用数据表 ID");
   }
 
   // 1. 获取现有所有记录的 record_id
@@ -1992,5 +2077,601 @@ export async function patchDocumentBlock(
     content: newContent,
     url: `https://open.feishu.cn/docx/${documentId}`,
     message: "块内容修改成功",
+  };
+}
+
+function getWikiObjTypeName(type: number | string): string {
+  switch (Number(type)) {
+    case 1:
+      return "doc";
+    case 2:
+      return "sheet";
+    case 3:
+      return "bitable";
+    case 4:
+      return "mindnote";
+    case 5:
+      return "file";
+    case 6:
+      return "slide";
+    case 7:
+      return "wiki";
+    case 8:
+      return "docx";
+    default:
+      return String(type || "unknown");
+  }
+}
+
+export interface WikiSpaceItem {
+  spaceId: string;
+  name: string;
+  description: string;
+  spaceType?: string;
+  visibility?: string;
+}
+
+/**
+ * 列出当前应用/机器人有权限访问的飞书知识库空间列表
+ */
+export async function listWikiSpaces(pageSize: number = 20): Promise<{
+  spaces: WikiSpaceItem[];
+  hasMore: boolean;
+}> {
+  const client = getFeishuClient();
+  try {
+    const res = await client.wiki.space.list({
+      params: {
+        page_size: pageSize,
+      },
+    });
+
+    if (res.code !== 0) {
+      throw new Error(formatLarkError(res, "获取知识库空间列表失败"));
+    }
+
+    const items = (res.data?.items || []).map((s: any) => ({
+      spaceId: s.space_id,
+      name: s.name,
+      description: s.description || "",
+      spaceType: s.space_type,
+      visibility: s.visibility,
+    }));
+
+    return {
+      spaces: items,
+      hasMore: Boolean(res.data?.has_more),
+    };
+  } catch (error: any) {
+    throw new Error(formatLarkError(error, "获取知识库空间列表失败"));
+  }
+}
+
+export interface WikiSearchItem {
+  wikiToken?: string;
+  documentId?: string;
+  title: string;
+  summary?: string;
+  url: string;
+  objType: string;
+  spaceId?: string;
+  ownerName?: string;
+  updateTime?: string;
+}
+
+export interface WikiSearchOutput {
+  query: string;
+  total: number;
+  hasMore: boolean;
+  spaceId?: string;
+  parentNodeToken?: string;
+  indexNodeToken?: string;
+  items: WikiSearchItem[];
+  source: string;
+  message?: string;
+}
+
+// ==================== 团队权威索引（类 llms.txt） ====================
+
+export interface TeamIndexEntry {
+  /** 所在章节标题，如「📦 2. 基础库与公共能力」 */
+  category: string;
+  /** 表格行内除链接外的全部文本（类别、关键词、执行要求），用于匹配 */
+  rowText: string;
+  linkTitle: string;
+  linkUrl: string;
+}
+
+export interface TeamIndex {
+  token: string;
+  title: string;
+  url: string;
+  /** 索引页完整 Markdown，直接交给 Agent 做语义判断 */
+  content: string;
+  entries: TeamIndexEntry[];
+}
+
+const INDEX_CACHE_TTL_MS = 10 * 60 * 1000;
+let teamIndexCache: { time: number; index: TeamIndex } | null = null;
+
+function extractWikiToken(value?: string): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.match(/\/wiki\/([0-9a-zA-Z_-]+)/)?.[1] || trimmed;
+}
+
+/** 飞书网页域名：优先取索引中链接的租户域名，保证返回给人的链接可直接打开 */
+function getWebOrigin(): string {
+  const firstLink = teamIndexCache?.index.entries[0]?.linkUrl;
+  if (firstLink) {
+    try {
+      return new URL(firstLink).origin;
+    } catch {
+      // ignore
+    }
+  }
+  return "https://open.feishu.cn";
+}
+
+function parseIndexEntries(markdown: string): TeamIndexEntry[] {
+  const entries: TeamIndexEntry[] = [];
+  let category = "";
+  for (const rawLine of markdown.split("\n")) {
+    const line = rawLine.trim();
+    const heading = line.match(/^#{2,6}\s+(.+)/);
+    if (heading) {
+      category = heading[1].trim();
+      continue;
+    }
+    // 表格已由 convertBlocksToMarkdown 渲染为一行一条记录，按行解析即可，不会串行
+    if (!line.startsWith("|")) continue;
+    const links = [...line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g)];
+    if (!links.length) continue;
+    const rowText = line
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/<br>|[|*`]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    for (const [, linkTitle, linkUrl] of links) {
+      entries.push({ category, rowText, linkTitle, linkUrl });
+    }
+  }
+  return entries;
+}
+
+/**
+ * 读取团队权威索引页（默认取 FEISHU_WIKI_INDEX_NODE_TOKEN），带 10 分钟缓存
+ */
+export async function getTeamIndex(indexToken?: string, forceRefresh = false): Promise<TeamIndex | null> {
+  const token = extractWikiToken(indexToken || process.env.FEISHU_WIKI_INDEX_NODE_TOKEN);
+  if (!token) return null;
+  if (
+    !forceRefresh &&
+    teamIndexCache?.index.token === token &&
+    Date.now() - teamIndexCache.time < INDEX_CACHE_TTL_MS
+  ) {
+    return teamIndexCache.index;
+  }
+  const doc = await readDocument(token);
+  const content = doc.content || "";
+  const entries = parseIndexEntries(content);
+  teamIndexCache = {
+    time: Date.now(),
+    index: { token, title: doc.title || "团队索引", url: "", content, entries },
+  };
+  teamIndexCache.index.url = `${getWebOrigin()}/wiki/${token}`;
+  return teamIndexCache.index;
+}
+
+// ==================== 检索词提取与打分 ====================
+
+// 口语化的动作词与助词：不参与匹配，并作为短语切分点
+const STOP_WORDS = [
+  "请帮我", "帮我", "帮忙", "请问", "麻烦", "一下", "检索", "搜索", "查询", "查找", "查看", "查下", "查一查",
+  "找到", "找下", "找一下", "如何", "怎样", "怎么样", "怎么", "哪些", "什么", "是否", "可以", "需要", "应该",
+  "配置", "安装", "接入", "使用", "执行", "实施", "落地", "关于", "以及", "并且", "然后", "知识库", "文档",
+  "资料", "团队", "我们", "我", "的", "了", "和", "与", "吗", "呢",
+];
+const SORTED_STOP_WORDS = [...STOP_WORDS].sort((a, b) => b.length - a.length);
+// 高频泛化词及由其组成的复合词（如「前端规范」「工程标准」）：单命中加低分，只有全为泛化词时才算总览检索
+const GENERIC_WORDS = ["前端", "规范", "标准", "指南", "方案", "说明", "工程化", "工程", "项目", "最佳实践", "手册", "总览", "导航", "索引"];
+const zhSegmenter = new Intl.Segmenter("zh", { granularity: "word" });
+
+function isGenericTerm(term: string): boolean {
+  let rest = term;
+  for (const word of GENERIC_WORDS) rest = rest.split(word).join("");
+  return rest.length === 0;
+}
+
+/**
+ * 从自然语言中提取检索词：技术英文词 + 去停用词后的中文短语 + Intl.Segmenter 中文分词（含单字词缀合并）
+ */
+export function extractSearchTerms(query: string): string[] {
+  const lower = query.toLowerCase();
+  const terms = new Set<string>();
+  const add = (term: string) => {
+    const t = term.trim();
+    if (t.length >= 2 && !STOP_WORDS.includes(t)) terms.add(t);
+  };
+
+  // 1. 英文 / 数字技术词（eslint、@ninebot/eslint-config、cicd）
+  for (const word of lower.match(/[a-z0-9@][a-z0-9_.@/-]*/g) || []) add(word);
+
+  // 2. 以停用词和标点切分出的中文连续短语（保留「动态路由」这类分词器会切碎的词）
+  let chunked = lower;
+  for (const stopWord of SORTED_STOP_WORDS) chunked = chunked.split(stopWord).join(" ");
+  const phrases = chunked.match(/[\u4e00-\u9fa5]+/g) || [];
+  for (const phrase of phrases) {
+    add(phrase);
+    // 3. 中文分词 + 单字前后缀合并（解决「组件+库+升级」漏掉「组件库」、「微+前端」漏掉「微前端」的问题）
+    const segs = [...zhSegmenter.segment(phrase)]
+      .filter((x) => x.isWordLike && /[\u4e00-\u9fa5]/.test(x.segment))
+      .map((x) => x.segment);
+    for (let i = 0; i < segs.length; i++) {
+      add(segs[i]);
+      if (i + 1 < segs.length && (segs[i].length === 1 || segs[i + 1].length === 1)) {
+        add(segs[i] + segs[i + 1]);
+      }
+      if (i + 2 < segs.length && segs[i + 1].length === 1 && segs[i + 2].length === 1) {
+        add(segs[i + 1] + segs[i + 2]);
+        add(segs[i] + segs[i + 1] + segs[i + 2]);
+      }
+    }
+  }
+
+  return terms.size ? [...terms] : [lower.trim()];
+}
+
+function scoreText(text: string, terms: string[]): number {
+  const lower = text.toLowerCase();
+  let score = 0;
+  for (const term of terms) {
+    if (lower.includes(term)) score += isGenericTerm(term) ? 0.3 : Math.min(term.length, 6);
+  }
+  return score;
+}
+
+/** 至少命中一个非泛化词才算相关；若检索词全是泛化词（如「前端规范」）则放宽 */
+function minRelevantScore(terms: string[]) {
+  return terms.every(isGenericTerm) ? 0.3 : 1;
+}
+
+function normalizeTitle(title: string) {
+  return title
+    .toLowerCase()
+    .replace(/\.(docx?|pdf|xlsx?|pptx?)$/, "")
+    .replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+// ==================== 知识库目录树 ====================
+
+type WikiNode = { node_token: string; obj_token: string; title: string; obj_type: any };
+
+const CACHE_TTL_MS = 15 * 60 * 1000;
+const spaceCatalogCache = new Map<string, { time: number; nodes: WikiNode[] }>();
+const parentResolveCache = new Map<string, { time: number; token: string; spaceId?: string; node?: WikiNode }>();
+const ARCHIVE_BRANCH_PATTERN = /周报|上线记录|绩效复盘|交接记录/;
+
+/** 轻量并发控制器（最多 6 个并发请求，避免冷启动串行耗时过长同时不触发飞书频控） */
+function createLimiter(concurrency: number) {
+  let active = 0;
+  const queue: Array<() => void> = [];
+  return async <T>(fn: () => Promise<T>): Promise<T> => {
+    if (active >= concurrency) await new Promise<void>((r) => queue.push(r));
+    active++;
+    try {
+      return await fn();
+    } finally {
+      active--;
+      queue.shift()?.();
+    }
+  };
+}
+const wikiApiLimit = createLimiter(6);
+
+async function listChildNodes(client: lark.Client, spaceId: string, parentToken?: string) {
+  const nodes: any[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await wikiApiLimit(() =>
+      client.wiki.spaceNode.list({
+        path: { space_id: spaceId },
+        params: { parent_node_token: parentToken, page_size: 50, ...(pageToken ? { page_token: pageToken } : {}) },
+      }),
+    );
+    nodes.push(...(res.data?.items || []));
+    pageToken = res.data?.has_more ? res.data.page_token : undefined;
+  } while (pageToken);
+  return nodes;
+}
+
+/**
+ * 并发递归收集目录子树（带缓存）。全空间遍历时跳过周报等大型归档分支
+ */
+async function collectSubtree(
+  client: lark.Client,
+  spaceId: string,
+  root: { token?: string; node?: WikiNode },
+  skipArchive: boolean,
+): Promise<WikiNode[]> {
+  const cacheKey = `${spaceId}:${root.token || "root"}:${skipArchive ? "skip" : "all"}`;
+  const cached = spaceCatalogCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < CACHE_TTL_MS) return cached.nodes;
+
+  const collected: WikiNode[] = root.node ? [root.node] : [];
+  async function walk(parentToken: string | undefined, depth: number) {
+    if (depth > 6) return;
+    const children = await listChildNodes(client, spaceId, parentToken);
+    const subTasks: Promise<void>[] = [];
+    for (const node of children) {
+      if (!node.node_token) continue;
+      collected.push({
+        node_token: node.node_token,
+        obj_token: node.obj_token || "",
+        title: node.title || "",
+        obj_type: node.obj_type,
+      });
+      if (node.has_child && !(skipArchive && ARCHIVE_BRANCH_PATTERN.test(node.title || ""))) {
+        subTasks.push(walk(node.node_token, depth + 1));
+      }
+    }
+    if (subTasks.length) await Promise.all(subTasks);
+  }
+  await walk(root.token, 0);
+  spaceCatalogCache.set(cacheKey, { time: Date.now(), nodes: collected });
+  return collected;
+}
+
+/**
+ * 解析父目录：支持 Wiki Token、URL 或空间根目录名称（结果缓存，避免每次检索都请求接口）
+ */
+async function resolveParentNode(client: lark.Client, raw: string, spaceId?: string) {
+  const cacheKey = `${spaceId || ""}:${raw}`;
+  const cached = parentResolveCache.get(cacheKey);
+  if (cached && Date.now() - cached.time < CACHE_TTL_MS) return cached;
+
+  const token = extractWikiToken(raw) || raw;
+  let result: { token: string; spaceId?: string; node?: WikiNode } = { token, spaceId };
+  try {
+    const res = await wikiApiLimit(() => client.wiki.space.getNode({ params: { token, obj_type: "wiki" } }));
+    const node = res.data?.node;
+    if (node?.node_token) {
+      result = {
+        token: node.node_token,
+        spaceId: spaceId || node.space_id,
+        node: { node_token: node.node_token, obj_token: node.obj_token || "", title: node.title || "", obj_type: node.obj_type },
+      };
+    }
+  } catch {
+    // 非 Token，尝试按目录名称匹配
+  }
+
+  if (!result.node && spaceId) {
+    const keyword = raw.toLowerCase();
+    const matched = (await listChildNodes(client, spaceId)).find((item: any) =>
+      item.title?.toLowerCase().includes(keyword),
+    );
+    if (matched?.node_token) {
+      result = {
+        token: matched.node_token,
+        spaceId,
+        node: { node_token: matched.node_token, obj_token: matched.obj_token || "", title: matched.title || "", obj_type: matched.obj_type },
+      };
+    }
+  }
+
+  const entry = { time: Date.now(), ...result };
+  parentResolveCache.set(cacheKey, entry);
+  return entry;
+}
+
+async function resolveSpaceId(client: lark.Client, value?: string) {
+  const trimmed = value?.trim();
+  if (!trimmed || !trimmed.includes("/wiki/")) return trimmed;
+  const spaceMatch = trimmed.match(/\/wiki\/space\/([0-9a-zA-Z_-]+)/);
+  if (spaceMatch) return spaceMatch[1];
+  try {
+    const res = await client.wiki.space.getNode({ params: { token: extractWikiToken(trimmed)!, obj_type: "wiki" } });
+    return res.data?.node?.space_id || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+/** 飞书官方全文搜索（需 search:docs:read 权限），仅在未限定目录时使用 */
+async function searchByOfficialEngine(client: lark.Client, query: string, spaceId: string | undefined, pageSize: number) {
+  const res = await client.search.v2.docWiki.search({
+    data: { query, wiki_filter: spaceId ? { space_ids: [spaceId] } : undefined, page_size: pageSize },
+  });
+  if (res.code !== 0) return [];
+  return (res.data?.res_units || []).map((unit: any): WikiSearchItem => {
+    const meta = unit.result_meta || {};
+    const token = meta.token;
+    const isWiki = unit.entity_type === "WIKI" || meta.doc_types === "WIKI";
+    return {
+      wikiToken: isWiki ? token : undefined,
+      documentId: isWiki ? undefined : token,
+      title: (unit.title_highlighted || token || "无标题").replace(/<[^>]+>/g, "").trim(),
+      summary: (unit.summary_highlighted || "").replace(/<[^>]+>/g, "").trim(),
+      url: meta.url || (token ? `${getWebOrigin()}/${isWiki ? "wiki" : "docx"}/${token}` : ""),
+      objType: meta.doc_types || unit.entity_type || "docx",
+      ownerName: meta.owner_name,
+      updateTime: meta.update_time ? new Date(meta.update_time * 1000).toLocaleString() : undefined,
+    };
+  });
+}
+
+function linkToSearchItem(linkUrl: string) {
+  const wikiToken = linkUrl.match(/\/wiki\/([0-9a-zA-Z_-]+)/)?.[1];
+  const documentId = wikiToken ? undefined : linkUrl.match(/\/(?:docx|docs|sheets|base)\/([0-9a-zA-Z_-]+)/)?.[1];
+  const objType = wikiToken ? "wiki" : linkUrl.match(/\/(docx|docs|sheets|base)\//)?.[1] || "link";
+  return { wikiToken, documentId, objType };
+}
+
+// ==================== 检索入口 ====================
+
+/**
+ * 在飞书知识库中检索文档。
+ * 优先级：团队权威索引（行级匹配） > 官方全文搜索（未限定目录时） > 限定目录的标题匹配。
+ */
+export async function searchWiki(
+  query: string,
+  options?: {
+    spaceId?: string;
+    parentNodeToken?: string;
+    indexNodeToken?: string;
+    pageSize?: number;
+  },
+): Promise<WikiSearchOutput> {
+  const client = getFeishuClient();
+  const trimmedQuery = query?.trim();
+  if (!trimmedQuery) {
+    throw new Error("搜索关键词不能为空");
+  }
+
+  const pageSize = Math.min(Math.max(options?.pageSize || 10, 1), 50);
+  const terms = extractSearchTerms(trimmedQuery);
+  const isOverviewQuery = terms.every(isGenericTerm);
+  const minScore = minRelevantScore(terms);
+  const notices: string[] = [];
+
+  const parentInputs = (options?.parentNodeToken || process.env.FEISHU_WIKI_PARENT_NODE_TOKEN || "")
+    .split(/[,，;；]/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  // 1. 并发加载团队索引与解析目标空间 / 父目录
+  const [teamIndex, initialSpaceId] = await Promise.all([
+    getTeamIndex(options?.indexNodeToken).catch((error: any) => {
+      notices.push(`团队索引读取失败（请检查机器人是否有该文档阅读权限）：${error.message || String(error)}`);
+      return null;
+    }),
+    resolveSpaceId(client, options?.spaceId || process.env.FEISHU_WIKI_SPACE_ID),
+  ]);
+
+  let spaceId = initialSpaceId;
+  const parents = await Promise.all(parentInputs.map((raw) => resolveParentNode(client, raw, spaceId)));
+  for (const parent of parents) {
+    spaceId = spaceId || parent.spaceId;
+  }
+
+  // 2. 团队权威索引：按表格行打分，命中项置顶
+  const indexItems: WikiSearchItem[] = [];
+  if (teamIndex) {
+    if (isOverviewQuery) {
+      indexItems.push({
+        wikiToken: teamIndex.token,
+        title: `📌 [团队权威索引] ${teamIndex.title}`,
+        summary: "团队工程规范、基础库、SDK 与最佳实践的唯一权威导航索引",
+        url: teamIndex.url,
+        objType: "wiki",
+      });
+    }
+    const scored = teamIndex.entries
+      .map((entry) => ({ entry, score: scoreText(`${entry.linkTitle} ${entry.rowText}`, terms) }))
+      .filter((x) => x.score >= minScore)
+      .sort((a, b) => b.score - a.score);
+    for (const { entry } of scored) {
+      indexItems.push({
+        ...linkToSearchItem(entry.linkUrl),
+        title: `⭐ [团队索引推荐] ${entry.linkTitle}`,
+        summary: `${entry.category ? `${entry.category} | ` : ""}${entry.rowText}`,
+        url: entry.linkUrl,
+      });
+    }
+  }
+
+  // 3. 目录树 / 官方搜索
+  const treeItems: WikiSearchItem[] = [];
+  let source = parents.length ? "directory_title_match" : "space_title_match";
+  try {
+    let officialItems: WikiSearchItem[] = [];
+    if (!parents.length) {
+      try {
+        officialItems = await searchByOfficialEngine(client, trimmedQuery, spaceId, pageSize);
+      } catch (error: any) {
+        const message = formatLarkError(error, "调用飞书搜索引擎失败");
+        if (message.includes("99991672") || message.includes("search:docs:read")) {
+          notices.push(
+            `飞书官方全文搜索需开通 search:docs:read 权限：https://open.feishu.cn/app/${process.env.FEISHU_APP_ID}/auth?q=search:docs:read&op_from=openapi&token_type=tenant`,
+          );
+        }
+      }
+    }
+
+    if (officialItems.length) {
+      source = "doc_wiki_search";
+      treeItems.push(...officialItems);
+    } else {
+      const spaceIds = spaceId
+        ? [spaceId]
+        : ((await client.wiki.space.list({ params: { page_size: 20 } })).data?.items || [])
+            .map((s: any) => s.space_id)
+            .filter(Boolean);
+      const isArchiveQuery = terms.some((t) => /周报|上线|复盘|交接|报销/.test(t));
+      const scoredNodes: Array<{ node: WikiNode; spaceId: string; score: number }> = [];
+
+      for (const sid of spaceIds) {
+        const roots = parents.length ? parents.map((p) => ({ token: p.token, node: p.node })) : [{}];
+        const subtrees = await Promise.all(
+          roots.map((root) => collectSubtree(client, sid, root, !parents.length && !isArchiveQuery)),
+        );
+        for (const nodes of subtrees) {
+          for (const node of nodes) {
+            const score = scoreText(node.title, terms);
+            if (score >= minScore) scoredNodes.push({ node, spaceId: sid, score });
+          }
+        }
+      }
+
+      scoredNodes.sort((a, b) => b.score - a.score);
+      for (const { node, spaceId: sid } of scoredNodes) {
+        treeItems.push({
+          wikiToken: node.node_token,
+          documentId: node.obj_token,
+          title: node.title,
+          url: `${getWebOrigin()}/wiki/${node.node_token}`,
+          objType: getWikiObjTypeName(node.obj_type),
+          spaceId: sid,
+        });
+      }
+    }
+  } catch (error: any) {
+    notices.push(`知识库目录检索失败：${error.message || String(error)}`);
+  }
+
+  // 4. 合并：索引直接命中项在前，其次目录命中项；按 Token 与归一化标题去重（同一文档的 docx 与 wiki 副本只保留一条）
+  const items: WikiSearchItem[] = [];
+  const seenTokens = new Set<string>();
+  const seenTitles = new Set<string>();
+  for (const item of [...indexItems, ...treeItems]) {
+    const tokens = [item.wikiToken, item.documentId].filter(Boolean) as string[];
+    const titleKey = normalizeTitle(item.title.replace(/^(⭐|📌) \[[^\]]+\] /, ""));
+    if (tokens.some((t) => seenTokens.has(t)) || (titleKey && seenTitles.has(titleKey))) continue;
+    tokens.forEach((t) => seenTokens.add(t));
+    if (titleKey) seenTitles.add(titleKey);
+    items.push(item);
+    if (items.length >= pageSize) break;
+  }
+
+  const hasIndexHit = indexItems.length > 0;
+  const fallbackIndexHint =
+    !items.length && teamIndex
+      ? `（可调用 feishu_get_team_index 查阅《${teamIndex.title}》 ${teamIndex.url} 确认是否有相关规范）`
+      : "";
+  return {
+    query: trimmedQuery,
+    total: items.length,
+    hasMore: false,
+    spaceId,
+    parentNodeToken: parents.map((p) => p.token).join(",") || undefined,
+    indexNodeToken: teamIndex?.token,
+    items,
+    source: items.length ? (hasIndexHit ? `team_index+${source}` : source) : "none",
+    message: notices.length
+      ? notices.join("\n")
+      : items.length
+        ? undefined
+        : `在飞书知识库中未检索到与 "${trimmedQuery}" 匹配的文档（检索词：${terms.join("、")}）${fallbackIndexHint}`,
   };
 }

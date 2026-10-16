@@ -54,6 +54,10 @@ app.get("/health", (req: any, res: any) => {
     },
     tools: [
       {
+        name: "feishu_get_team_index",
+        description: "读取团队权威导航索引的完整内容（工程规范、基础库、SDK、脚手架等的唯一权威入口）",
+      },
+      {
         name: "feishu_read_document",
         description: "读取飞书云文档 (Docx)、知识库 (Wiki) 或表格内容，转为 Markdown",
       },
@@ -76,6 +80,14 @@ app.get("/health", (req: any, res: any) => {
       {
         name: "feishu_get_document_info",
         description: "获取飞书文档的基本元信息（标题、版本等）",
+      },
+      {
+        name: "feishu_search_wiki",
+        description: "在飞书知识库 (Wiki) 中按关键词检索文档，优先返回团队权威索引匹配项及限定目录下的文档",
+      },
+      {
+        name: "feishu_list_wiki_spaces",
+        description: "列出当前应用/机器人有权限访问的所有飞书知识库空间（Wiki Spaces）",
       },
     ],
   });

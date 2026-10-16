@@ -1,0 +1,44 @@
+{
+  "name": "@ninebot/feishu-mcp",
+  "version": "1.0.0",
+  "description": "九号前端团队飞书知识库与工程规范 MCP (Model Context Protocol) 服务",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "ninebot-feishu-mcp": "./dist/cli.js",
+    "ninebot-feishu-mcp-server": "./dist/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "server": "node dist/server.js",
+    "dev": "tsx src/cli.ts",
+    "dev:server": "tsx src/server.ts",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "feishu",
+    "lark",
+    "ninebot",
+    "cursor",
+    "ai-agent"
+  ],
+  "author": "Ninebot Frontend Team",
+  "license": "MIT",
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.22.4 || ^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.8.0"
+  }
+}
