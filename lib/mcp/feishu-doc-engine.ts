@@ -2,6 +2,15 @@ import * as lark from "@larksuiteoapi/node-sdk";
 import { randomUUID } from "crypto";
 import path from "path";
 import fs from "fs";
+import MiniSearch from "minisearch";
+import {
+  analyzeSearchQuery,
+  createSearchAnalyzer,
+  normalizeSearchText,
+  type SearchAnalyzer,
+  type SearchLexiconEntry,
+  type SearchQueryAnalysis,
+} from "./search-analyzer";
 
 function loadEnvFile(filePath: string) {
   try {
@@ -2180,6 +2189,8 @@ export interface TeamIndexEntry {
   rowText: string;
   linkTitle: string;
   linkUrl: string;
+  /** Optional aliases parsed from the index table's 关键词 / 检索词 / 别名 column. */
+  searchAliases: string[];
 }
 
 export interface TeamIndex {
@@ -2216,27 +2227,81 @@ function getWebOrigin(): string {
 function parseIndexEntries(markdown: string): TeamIndexEntry[] {
   const entries: TeamIndexEntry[] = [];
   let category = "";
+  let tableHeaders: string[] = [];
   for (const rawLine of markdown.split("\n")) {
     const line = rawLine.trim();
     const heading = line.match(/^#{2,6}\s+(.+)/);
     if (heading) {
       category = heading[1].trim();
+      tableHeaders = [];
       continue;
     }
     // 表格已由 convertBlocksToMarkdown 渲染为一行一条记录，按行解析即可，不会串行
-    if (!line.startsWith("|")) continue;
+    if (!line.startsWith("|")) {
+      tableHeaders = [];
+      continue;
+    }
+    const cells = line
+      .split(/(?<!\\)\|/)
+      .slice(1, -1)
+      .map((cell) => cell.replace(/\\\|/g, "|"));
+    const normalizedCells = cells.map((cell) => normalizeIndexCell(cell));
+    if (normalizedCells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
+
     const links = [...line.matchAll(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g)];
-    if (!links.length) continue;
+    if (!links.length) {
+      if (!tableHeaders.length || normalizedCells.some(isSearchAliasHeader)) {
+        tableHeaders = normalizedCells;
+      }
+      continue;
+    }
     const rowText = line
       .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .replace(/<br>|[|*`]/g, " ")
+      .replace(/<br\s*\/?>|[|*`]/gi, " ")
       .replace(/\s+/g, " ")
       .trim();
+    const searchAliases = extractIndexSearchAliases(line, cells, tableHeaders);
     for (const [, linkTitle, linkUrl] of links) {
-      entries.push({ category, rowText, linkTitle, linkUrl });
+      entries.push({ category, rowText, linkTitle, linkUrl, searchAliases });
     }
   }
   return entries;
+}
+
+/** Parses the authority-index table's 关键词 / 检索词 / 别名 column. */
+function normalizeIndexCell(value: string) {
+  return value
+    .replace(/<br\s*\/?>/gi, "、")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[>*`]/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function isSearchAliasHeader(header: string) {
+  return /^(?:关键词|检索词|别名|keywords?|aliases?)(?:\s*[/|、,，]\s*(?:关键词|检索词|别名|keywords?|aliases?))*$/i.test(
+    header.trim(),
+  );
+}
+
+function extractIndexSearchAliases(line: string, cells: string[], tableHeaders: string[]) {
+  const aliases: string[] = [];
+  for (let index = 0; index < cells.length; index++) {
+    if (!isSearchAliasHeader(tableHeaders[index] || "")) continue;
+    aliases.push(...splitSearchAliases(cells[index]));
+  }
+  const pattern = /(?:关键词|检索词|别名|keywords?|aliases?)\s*[:：]\s*([^|]+)/gi;
+  for (const match of line.matchAll(pattern)) {
+    aliases.push(...splitSearchAliases(match[1]));
+  }
+  return [...new Set(aliases)];
+}
+
+function splitSearchAliases(value: string) {
+  return normalizeIndexCell(value)
+    .split(/[、,，;；]/)
+    .map((alias) => alias.trim())
+    .filter((alias) => alias.length >= 2 && alias.length <= 80);
 }
 
 /**
@@ -2263,77 +2328,11 @@ export async function getTeamIndex(indexToken?: string, forceRefresh = false): P
   return teamIndexCache.index;
 }
 
-// ==================== 检索词提取与打分 ====================
+// ==================== 检索词提取与重排 ====================
 
-// 口语化的动作词与助词：不参与匹配，并作为短语切分点
-const STOP_WORDS = [
-  "请帮我", "帮我", "帮忙", "请问", "麻烦", "一下", "检索", "搜索", "查询", "查找", "查看", "查下", "查一查",
-  "找到", "找下", "找一下", "如何", "怎样", "怎么样", "怎么", "哪些", "什么", "是否", "可以", "需要", "应该",
-  "配置", "安装", "接入", "使用", "执行", "实施", "落地", "关于", "以及", "并且", "然后", "知识库", "文档",
-  "资料", "团队", "我们", "我", "的", "了", "和", "与", "吗", "呢",
-];
-const SORTED_STOP_WORDS = [...STOP_WORDS].sort((a, b) => b.length - a.length);
-// 高频泛化词及由其组成的复合词（如「前端规范」「工程标准」）：单命中加低分，只有全为泛化词时才算总览检索
-const GENERIC_WORDS = ["前端", "规范", "标准", "指南", "方案", "说明", "工程化", "工程", "项目", "最佳实践", "手册", "总览", "导航", "索引"];
-const zhSegmenter = new Intl.Segmenter("zh", { granularity: "word" });
-
-function isGenericTerm(term: string): boolean {
-  let rest = term;
-  for (const word of GENERIC_WORDS) rest = rest.split(word).join("");
-  return rest.length === 0;
-}
-
-/**
- * 从自然语言中提取检索词：技术英文词 + 去停用词后的中文短语 + Intl.Segmenter 中文分词（含单字词缀合并）
- */
+/** 保留旧导出，供已有调用方使用；实际检索使用同一套 Trie 分析结果。 */
 export function extractSearchTerms(query: string): string[] {
-  const lower = query.toLowerCase();
-  const terms = new Set<string>();
-  const add = (term: string) => {
-    const t = term.trim();
-    if (t.length >= 2 && !STOP_WORDS.includes(t)) terms.add(t);
-  };
-
-  // 1. 英文 / 数字技术词（eslint、@ninebot/eslint-config、cicd）
-  for (const word of lower.match(/[a-z0-9@][a-z0-9_.@/-]*/g) || []) add(word);
-
-  // 2. 以停用词和标点切分出的中文连续短语（保留「动态路由」这类分词器会切碎的词）
-  let chunked = lower;
-  for (const stopWord of SORTED_STOP_WORDS) chunked = chunked.split(stopWord).join(" ");
-  const phrases = chunked.match(/[\u4e00-\u9fa5]+/g) || [];
-  for (const phrase of phrases) {
-    add(phrase);
-    // 3. 中文分词 + 单字前后缀合并（解决「组件+库+升级」漏掉「组件库」、「微+前端」漏掉「微前端」的问题）
-    const segs = [...zhSegmenter.segment(phrase)]
-      .filter((x) => x.isWordLike && /[\u4e00-\u9fa5]/.test(x.segment))
-      .map((x) => x.segment);
-    for (let i = 0; i < segs.length; i++) {
-      add(segs[i]);
-      if (i + 1 < segs.length && (segs[i].length === 1 || segs[i + 1].length === 1)) {
-        add(segs[i] + segs[i + 1]);
-      }
-      if (i + 2 < segs.length && segs[i + 1].length === 1 && segs[i + 2].length === 1) {
-        add(segs[i + 1] + segs[i + 2]);
-        add(segs[i] + segs[i + 1] + segs[i + 2]);
-      }
-    }
-  }
-
-  return terms.size ? [...terms] : [lower.trim()];
-}
-
-function scoreText(text: string, terms: string[]): number {
-  const lower = text.toLowerCase();
-  let score = 0;
-  for (const term of terms) {
-    if (lower.includes(term)) score += isGenericTerm(term) ? 0.3 : Math.min(term.length, 6);
-  }
-  return score;
-}
-
-/** 至少命中一个非泛化词才算相关；若检索词全是泛化词（如「前端规范」）则放宽 */
-function minRelevantScore(terms: string[]) {
-  return terms.every(isGenericTerm) ? 0.3 : 1;
+  return analyzeSearchQuery(query).terms;
 }
 
 function normalizeTitle(title: string) {
@@ -2508,6 +2507,208 @@ function linkToSearchItem(linkUrl: string) {
   return { wikiToken, documentId, objType };
 }
 
+type SearchSource = "team_index" | "wiki_tree" | "official";
+type LocalSearchDocument = {
+  id: string;
+  title: string;
+  summary: string;
+  category: string;
+  aliases: string;
+  item: WikiSearchItem;
+  source: Exclude<SearchSource, "official">;
+};
+type RankedSearchItem = { item: WikiSearchItem; source: SearchSource; score: number };
+type LocalSearchIndex = { search: MiniSearch<LocalSearchDocument>; documents: Map<string, LocalSearchDocument> };
+
+const localSearchIndexCache = new Map<string, LocalSearchIndex>();
+
+function isAsciiSearchTerm(term: string) {
+  return /^[a-z0-9@._/-]+$/.test(term);
+}
+
+function getLocalSearchIndex(documents: LocalSearchDocument[], analyzer: SearchAnalyzer) {
+  const key = documents
+    .map((document) => [document.id, document.title, document.summary, document.category, document.aliases].join("\u0000"))
+    .join("\u0001") + analyzer.cacheKey;
+  const cached = localSearchIndexCache.get(key);
+  if (cached) return cached;
+
+  const search = new MiniSearch<LocalSearchDocument>({
+    fields: ["title", "aliases", "category", "summary"],
+    tokenize: analyzer.tokenize,
+    searchOptions: {
+      boost: { title: 4, aliases: 3, category: 2, summary: 1 },
+      combineWith: "OR",
+      prefix: (term) => isAsciiSearchTerm(term) && term.length >= 3,
+      fuzzy: (term) => (isAsciiSearchTerm(term) && term.length >= 5 ? 0.2 : false),
+    },
+  });
+  search.addAll(documents);
+  const index = { search, documents: new Map(documents.map((document) => [document.id, document])) };
+  localSearchIndexCache.set(key, index);
+  // Keep the common team-index-only and tree-backed variants, without retaining
+  // arbitrary catalogs forever in a long-running HTTP MCP process.
+  while (localSearchIndexCache.size > 4) {
+    const oldestKey = localSearchIndexCache.keys().next().value;
+    if (!oldestKey) break;
+    localSearchIndexCache.delete(oldestKey);
+  }
+  return index;
+}
+
+function getRelevance(
+  item: WikiSearchItem,
+  analysis: SearchQueryAnalysis,
+  analyzer: SearchAnalyzer,
+  extraText = "",
+  matchedQueryTerms?: ReadonlySet<string>,
+  titleMatchedQueryTerms?: ReadonlySet<string>,
+) {
+  const title = normalizeSearchText(item.title.replace(/^(⭐|📌) \[[^\]]+\] /, ""));
+  const text = normalizeSearchText(`${item.title} ${item.summary || ""} ${extraText}`);
+  const documentTerms = new Set(analyzer.tokenize(text));
+  const titleTerms = new Set(analyzer.tokenize(title));
+  const matchedCoreTerms = analysis.coreTerms.filter(
+    (term) => documentTerms.has(term) || matchedQueryTerms?.has(term),
+  );
+  const titleMatchedCoreTerms = analysis.coreTerms.filter(
+    (term) => titleTerms.has(term) || titleMatchedQueryTerms?.has(term),
+  );
+  const coverage = analysis.coreTerms.length ? matchedCoreTerms.length / analysis.coreTerms.length : 1;
+  const phraseInTitle = analysis.exactPhrases.some((phrase) => title.includes(phrase));
+  const phraseInText = phraseInTitle || analysis.exactPhrases.some((phrase) => text.includes(phrase));
+  const isRelevant =
+    analysis.isOverviewQuery ||
+    phraseInText ||
+    (analysis.coreTerms.length <= 2 ? matchedCoreTerms.length >= 1 : coverage >= 0.5);
+  return { coverage, phraseInTitle, phraseInText, titleMatchCount: titleMatchedCoreTerms.length, isRelevant };
+}
+
+function rankLocalDocuments(
+  documents: LocalSearchDocument[],
+  analysis: SearchQueryAnalysis,
+  analyzer: SearchAnalyzer,
+  limit: number,
+): RankedSearchItem[] {
+  if (!documents.length) return [];
+  const index = getLocalSearchIndex(documents, analyzer);
+  const query = analysis.terms.join("\u0000") || analysis.normalized;
+  const results = index.search
+    .search(query, { tokenize: (q) => q.split("\u0000").filter(Boolean) })
+    .slice(0, limit * 3);
+  const ranked: RankedSearchItem[] = [];
+  for (const result of results) {
+    const document = index.documents.get(String(result.id));
+    if (!document) continue;
+    const matchedQueryTerms = new Set(result.queryTerms || []);
+    const hasTitleFieldMatch = Object.values(result.match || {}).some((fields) => fields.includes("title"));
+    const titleMatchedQueryTerms = hasTitleFieldMatch ? matchedQueryTerms : undefined;
+    const relevance = getRelevance(
+      document.item,
+      analysis,
+      analyzer,
+      `${document.title} ${document.category} ${document.aliases} ${document.summary}`,
+      matchedQueryTerms,
+      titleMatchedQueryTerms,
+    );
+    if (!relevance.isRelevant) continue;
+    ranked.push({
+      item: document.item,
+      source: document.source,
+      score:
+        result.score +
+        relevance.coverage * 10 +
+        relevance.titleMatchCount * 2 +
+        (relevance.phraseInTitle ? 8 : relevance.phraseInText ? 4 : 0) +
+        (document.source === "team_index" ? (relevance.coverage >= 0.6 || relevance.phraseInText ? 2 : 0.5) : 0),
+    });
+  }
+  return ranked.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+function rankOfficialItems(items: WikiSearchItem[], analysis: SearchQueryAnalysis, analyzer: SearchAnalyzer): RankedSearchItem[] {
+  const total = Math.max(items.length, 1);
+  return items
+    .map((item, index) => {
+      const relevance = getRelevance(item, analysis, analyzer);
+      return {
+        item,
+        source: "official" as const,
+        // The official engine sees document bodies; preserve its rank as a small
+        // prior when title/summary do not expose every matched term.
+        score:
+          (total - index) / total +
+          relevance.coverage * 10 +
+          relevance.titleMatchCount * 2 +
+          (relevance.phraseInTitle ? 8 : relevance.phraseInText ? 4 : 0),
+      };
+    })
+    .sort((a, b) => b.score - a.score);
+}
+
+function createTeamSearchDocuments(teamIndex: TeamIndex): LocalSearchDocument[] {
+  return teamIndex.entries.map((entry, index) => ({
+    id: `team:${index}:${entry.linkUrl}`,
+    title: entry.linkTitle,
+    summary: entry.rowText,
+    category: entry.category,
+    aliases: entry.searchAliases.join(" "),
+    source: "team_index" as const,
+    item: {
+      ...linkToSearchItem(entry.linkUrl),
+      title: `⭐ [团队索引推荐] ${entry.linkTitle}`,
+      summary: `${entry.category ? `${entry.category} | ` : ""}${entry.rowText}`,
+      url: entry.linkUrl,
+    },
+  }));
+}
+
+function createTreeSearchDocuments(nodes: Array<{ node: WikiNode; spaceId: string }>): LocalSearchDocument[] {
+  return nodes.map(({ node, spaceId }) => ({
+    id: `tree:${spaceId}:${node.node_token}`,
+    title: node.title,
+    summary: "",
+    category: "",
+    aliases: "",
+    source: "wiki_tree" as const,
+    item: {
+      wikiToken: node.node_token,
+      documentId: node.obj_token,
+      title: node.title,
+      url: `${getWebOrigin()}/wiki/${node.node_token}`,
+      objType: getWikiObjTypeName(node.obj_type),
+      spaceId,
+    },
+  }));
+}
+
+function extractTitleSubjectAlias(title: string): string | undefined {
+  const normalized = normalizeSearchText(title);
+  const stripped = normalized
+    .replace(
+      /(?:最佳实践|工程规范|开发规范|接入规范|使用指南|开发指南|发布指南|升级指南|配置指南|规范|标准|指南|方案|说明|手册|总览|导航|索引|文档)+$/g,
+      "",
+    )
+    .trim();
+  if (stripped.length < 2 || stripped === normalized || /^(?:前端|工程|工程化|项目)+$/.test(stripped)) {
+    return undefined;
+  }
+  return stripped;
+}
+
+function createTeamSearchLexicon(teamIndex: TeamIndex | null): SearchLexiconEntry[] {
+  if (!teamIndex) return [];
+  const entries: SearchLexiconEntry[] = [];
+  for (const entry of teamIndex.entries) {
+    const subjectAlias = extractTitleSubjectAlias(entry.linkTitle);
+    const aliases = [...new Set([entry.linkTitle, ...(subjectAlias ? [subjectAlias] : []), ...entry.searchAliases])];
+    if (entry.searchAliases.length > 0 || subjectAlias) {
+      entries.push({ canonical: entry.linkTitle, aliases });
+    }
+  }
+  return entries;
+}
+
 // ==================== 检索入口 ====================
 
 /**
@@ -2530,9 +2731,6 @@ export async function searchWiki(
   }
 
   const pageSize = Math.min(Math.max(options?.pageSize || 10, 1), 50);
-  const terms = extractSearchTerms(trimmedQuery);
-  const isOverviewQuery = terms.every(isGenericTerm);
-  const minScore = minRelevantScore(terms);
   const notices: string[] = [];
 
   const parentInputs = (options?.parentNodeToken || process.env.FEISHU_WIKI_PARENT_NODE_TOKEN || "")
@@ -2554,35 +2752,30 @@ export async function searchWiki(
   for (const parent of parents) {
     spaceId = spaceId || parent.spaceId;
   }
+  const analyzer = createSearchAnalyzer({ lexicon: createTeamSearchLexicon(teamIndex) });
+  const analysis = analyzer.analyzeQuery(trimmedQuery);
 
-  // 2. 团队权威索引：按表格行打分，命中项置顶
-  const indexItems: WikiSearchItem[] = [];
+  // 2. 团队权威索引：MiniSearch 的 BM25 负责召回，覆盖率确保弱命中不置顶。
+  const candidateLimit = Math.max(pageSize * 3, 30);
+  const candidates: RankedSearchItem[] = [];
   if (teamIndex) {
-    if (isOverviewQuery) {
-      indexItems.push({
-        wikiToken: teamIndex.token,
-        title: `📌 [团队权威索引] ${teamIndex.title}`,
-        summary: "团队工程规范、基础库、SDK 与最佳实践的唯一权威导航索引",
-        url: teamIndex.url,
-        objType: "wiki",
+    if (analysis.isOverviewQuery) {
+      candidates.push({
+        source: "team_index",
+        score: Number.MAX_SAFE_INTEGER,
+        item: {
+          wikiToken: teamIndex.token,
+          title: `📌 [团队权威索引] ${teamIndex.title}`,
+          summary: "团队工程规范、基础库、SDK 与最佳实践的唯一权威导航索引",
+          url: teamIndex.url,
+          objType: "wiki",
+        },
       });
     }
-    const scored = teamIndex.entries
-      .map((entry) => ({ entry, score: scoreText(`${entry.linkTitle} ${entry.rowText}`, terms) }))
-      .filter((x) => x.score >= minScore)
-      .sort((a, b) => b.score - a.score);
-    for (const { entry } of scored) {
-      indexItems.push({
-        ...linkToSearchItem(entry.linkUrl),
-        title: `⭐ [团队索引推荐] ${entry.linkTitle}`,
-        summary: `${entry.category ? `${entry.category} | ` : ""}${entry.rowText}`,
-        url: entry.linkUrl,
-      });
-    }
+    candidates.push(...rankLocalDocuments(createTeamSearchDocuments(teamIndex), analysis, analyzer, candidateLimit));
   }
 
   // 3. 目录树 / 官方搜索
-  const treeItems: WikiSearchItem[] = [];
   let source = parents.length ? "directory_title_match" : "space_title_match";
   try {
     let officialItems: WikiSearchItem[] = [];
@@ -2601,15 +2794,15 @@ export async function searchWiki(
 
     if (officialItems.length) {
       source = "doc_wiki_search";
-      treeItems.push(...officialItems);
+      candidates.push(...rankOfficialItems(officialItems, analysis, analyzer));
     } else {
       const spaceIds = spaceId
         ? [spaceId]
         : ((await client.wiki.space.list({ params: { page_size: 20 } })).data?.items || [])
             .map((s: any) => s.space_id)
             .filter(Boolean);
-      const isArchiveQuery = terms.some((t) => /周报|上线|复盘|交接|报销/.test(t));
-      const scoredNodes: Array<{ node: WikiNode; spaceId: string; score: number }> = [];
+      const isArchiveQuery = analysis.terms.some((term) => /周报|上线|复盘|交接|报销/.test(term));
+      const treeNodes: Array<{ node: WikiNode; spaceId: string }> = [];
 
       for (const sid of spaceIds) {
         const roots = parents.length ? parents.map((p) => ({ token: p.token, node: p.node })) : [{}];
@@ -2618,43 +2811,34 @@ export async function searchWiki(
         );
         for (const nodes of subtrees) {
           for (const node of nodes) {
-            const score = scoreText(node.title, terms);
-            if (score >= minScore) scoredNodes.push({ node, spaceId: sid, score });
+            treeNodes.push({ node, spaceId: sid });
           }
         }
       }
-
-      scoredNodes.sort((a, b) => b.score - a.score);
-      for (const { node, spaceId: sid } of scoredNodes) {
-        treeItems.push({
-          wikiToken: node.node_token,
-          documentId: node.obj_token,
-          title: node.title,
-          url: `${getWebOrigin()}/wiki/${node.node_token}`,
-          objType: getWikiObjTypeName(node.obj_type),
-          spaceId: sid,
-        });
-      }
+      candidates.push(...rankLocalDocuments(createTreeSearchDocuments(treeNodes), analysis, analyzer, candidateLimit));
     }
   } catch (error: any) {
     notices.push(`知识库目录检索失败：${error.message || String(error)}`);
   }
 
-  // 4. 合并：索引直接命中项在前，其次目录命中项；按 Token 与归一化标题去重（同一文档的 docx 与 wiki 副本只保留一条）
+  // 4. 合并：所有来源已统一重排；按 Token 与归一化标题去重。
   const items: WikiSearchItem[] = [];
   const seenTokens = new Set<string>();
   const seenTitles = new Set<string>();
-  for (const item of [...indexItems, ...treeItems]) {
+  const sortedCandidates = candidates.sort((a, b) => b.score - a.score);
+  let hasIndexHit = false;
+  for (const candidate of sortedCandidates) {
+    const { item } = candidate;
     const tokens = [item.wikiToken, item.documentId].filter(Boolean) as string[];
     const titleKey = normalizeTitle(item.title.replace(/^(⭐|📌) \[[^\]]+\] /, ""));
     if (tokens.some((t) => seenTokens.has(t)) || (titleKey && seenTitles.has(titleKey))) continue;
     tokens.forEach((t) => seenTokens.add(t));
     if (titleKey) seenTitles.add(titleKey);
     items.push(item);
+    if (candidate.source === "team_index") hasIndexHit = true;
     if (items.length >= pageSize) break;
   }
 
-  const hasIndexHit = indexItems.length > 0;
   const fallbackIndexHint =
     !items.length && teamIndex
       ? `（可调用 feishu_get_team_index 查阅《${teamIndex.title}》 ${teamIndex.url} 确认是否有相关规范）`
@@ -2672,6 +2856,6 @@ export async function searchWiki(
       ? notices.join("\n")
       : items.length
         ? undefined
-        : `在飞书知识库中未检索到与 "${trimmedQuery}" 匹配的文档（检索词：${terms.join("、")}）${fallbackIndexHint}`,
+        : `在飞书知识库中未检索到与 "${trimmedQuery}" 匹配的文档（检索词：${analysis.terms.join("、")}）${fallbackIndexHint}`,
   };
 }
