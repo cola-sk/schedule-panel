@@ -8,8 +8,8 @@ export const NINEBOT_DEFAULTS = {
   SPACE_ID: "7680762028796972249",
   /** 《前端工程化规范与能力导航索引》Wiki Token */
   INDEX_NODE_TOKEN: "HET8wUwdgivtMtkp7QocSD9pn2e",
-  /** 限制父目录：规范与标准 + 基础库与通用能力 */
-  PARENT_NODE_TOKENS: "AZ5awBTNviWQvEkFIkIcjsYJnae,Q9BlwNIfaiUhP5kyOvbc5RSxndc",
+  /** 限制父目录：规范与标准 + 基础库与通用能力 + 监控和运维 */
+  PARENT_NODE_TOKENS: "AZ5awBTNviWQvEkFIkIcjsYJnae,Q9BlwNIfaiUhP5kyOvbc5RSxndc,IJtpwQHPiirZaNksdjicOlnxnnb",
   /** 九号飞书 Web 域名 */
   WEB_ORIGIN: "https://segway-ninebot.feishu.cn",
 };
@@ -46,8 +46,6 @@ export function initEnvironment(): void {
   const candidates = [
     path.join(process.cwd(), ".env.local"),
     path.join(process.cwd(), ".env"),
-    path.join(os.homedir(), ".ninebot-feishu-mcp.env"),
-    path.join(os.homedir(), ".feishu-mcp.env"),
     path.resolve(__dirname, "../../.env.local"),
     path.resolve(__dirname, "../../.env"),
     path.resolve(__dirname, "../../../.env.local"),

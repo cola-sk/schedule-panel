@@ -84,7 +84,7 @@ FEISHU_APP_ID=xxx FEISHU_APP_SECRET=xxx npx @ninebot/feishu-mcp-server
 | `FEISHU_APP_SECRET` | **是** | - | 飞书自建应用 App Secret |
 | `FEISHU_WIKI_SPACE_ID` | 否 | `7680762028796972249` | 九号前端研发部知识库空间 ID |
 | `FEISHU_WIKI_INDEX_NODE_TOKEN` | 否 | `HET8wUwdgivtMtkp7QocSD9pn2e` | 《前端工程化规范与能力导航索引》Wiki Token |
-| `FEISHU_WIKI_PARENT_NODE_TOKEN` | 否 | `AZ5awBTNviWQvEkFIkIcjsYJnae,Q9BlwNIfaiUhP5kyOvbc5RSxndc` | 限制检索的父目录（规范与标准 + 基础库与通用能力） |
+| `FEISHU_WIKI_PARENT_NODE_TOKEN` | 否 | `AZ5awBTNviWQvEkFIkIcjsYJnae,Q9BlwNIfaiUhP5kyOvbc5RSxndc,IJtpwQHPiirZaNksdjicOlnxnnb` | 限制检索的父目录（规范与标准 + 基础库与通用能力） |
 | `FEISHU_MCP_PORT` | 否 | `9798` | HTTP 服务监听端口 |
 
 ---

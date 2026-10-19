@@ -2857,6 +2857,6 @@ export async function searchWiki(
       ? notices.join("\n")
       : items.length
         ? undefined
-        : `在飞书知识库中未检索到与 "${trimmedQuery}" 匹配的文档（检索词：${analysis.terms.join("、")}）${fallbackIndexHint}`,
+        : `在飞书知识库中未检索到与 "${trimmedQuery}" 匹配的文档（检索词：${analysis.terms.join("、")}${parents.length ? `；限定检索目录：${parents.map((p) => p.node?.title || p.token).join("、")}` : ""}）${fallbackIndexHint}`,
   };
 }
