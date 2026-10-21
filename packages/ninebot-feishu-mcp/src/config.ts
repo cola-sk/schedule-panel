@@ -12,6 +12,8 @@ export const NINEBOT_DEFAULTS = {
   PARENT_NODE_TOKENS: "AZ5awBTNviWQvEkFIkIcjsYJnae,Q9BlwNIfaiUhP5kyOvbc5RSxndc,IJtpwQHPiirZaNksdjicOlnxnnb",
   /** 九号飞书 Web 域名 */
   WEB_ORIGIN: "https://segway-ninebot.feishu.cn",
+  /** 默认监控上报服务域名 */
+  TELEMETRY_ENDPOINT: "https://mcp-log.tz0618.uk",
 };
 
 /**

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { handle } from "hono/vercel";
 import { defaultStorage, TelemetryStorage } from "./storage.js";
 import type {
   McpTelemetryEvent,
@@ -17,18 +18,18 @@ export function createCollectorApp(storage: TelemetryStorage = defaultStorage) {
   app.use("*", cors());
 
   // 1. 健康检查
-  app.get("/", (c) => {
+  const rootHandler = (c: any) => {
     return c.json({
       service: "ninebot-mcp-telemetry-collector",
       status: "healthy",
       timestamp: new Date().toISOString(),
       version: "1.0.0",
     });
-  });
+  };
 
-  app.get("/health", (c) => {
-    return c.json({ status: "ok" });
-  });
+  app.get("/", rootHandler);
+  app.get("/api", rootHandler);
+  app.get("/health", (c) => c.json({ status: "ok" }));
 
   // 2. 接收监控上报（支持单个或批量）
   const handleReport = async (c: any) => {
@@ -117,3 +118,6 @@ export function createCollectorApp(storage: TelemetryStorage = defaultStorage) {
 }
 
 export const app = createCollectorApp();
+
+// 导出 Vercel / Node.js Serverless Function 标准默认处理函数
+export default handle(app);

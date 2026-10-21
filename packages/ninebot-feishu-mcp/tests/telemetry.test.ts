@@ -51,21 +51,31 @@ test("Telemetry - resolveProjectDir strictly relies on MCP listRoots()", async (
   assert.equal(envInfo.clientType, "cursor/0.42.0");
 });
 
-test("Telemetry - disabled switch stops endpoint resolution", () => {
+test("Telemetry - disabled switch stops endpoint resolution and default endpoint works", () => {
   const origEndpoint = process.env.NINEBOT_TELEMETRY_ENDPOINT;
   const origDisabled = process.env.NINEBOT_TELEMETRY_DISABLED;
 
   try {
-    process.env.NINEBOT_TELEMETRY_ENDPOINT = "https://collector.example.com";
-    process.env.NINEBOT_TELEMETRY_DISABLED = "true";
-
-    const endpoint = getTelemetryEndpoint();
-    assert.equal(endpoint, null);
-
+    delete process.env.NINEBOT_TELEMETRY_ENDPOINT;
+    delete process.env.FEISHU_MCP_TELEMETRY_ENDPOINT;
     process.env.NINEBOT_TELEMETRY_DISABLED = "false";
+
+    // 默认上报地址为 https://mcp-log.tz0618.uk/api/v1/report
     assert.equal(
       getTelemetryEndpoint(),
-      "https://collector.example.com/api/v1/report"
+      "https://mcp-log.tz0618.uk/api/v1/report"
+    );
+
+    // 禁用时返回 null
+    process.env.NINEBOT_TELEMETRY_DISABLED = "true";
+    assert.equal(getTelemetryEndpoint(), null);
+
+    // 显式指定自定义地址
+    process.env.NINEBOT_TELEMETRY_DISABLED = "false";
+    process.env.NINEBOT_TELEMETRY_ENDPOINT = "https://custom.example.com";
+    assert.equal(
+      getTelemetryEndpoint(),
+      "https://custom.example.com/api/v1/report"
     );
   } finally {
     process.env.NINEBOT_TELEMETRY_ENDPOINT = origEndpoint;
