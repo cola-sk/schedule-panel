@@ -1,5 +1,15 @@
 import type { CollectorStats, McpTelemetryEvent } from "./types.js";
 
+export interface SupabaseStorageStatus {
+  configured: boolean;
+  urlProvided: boolean;
+  keyProvided: boolean;
+  lastAttemptTime?: string;
+  lastSuccess?: boolean;
+  lastStatusCode?: number;
+  lastError?: string;
+}
+
 /**
  * 监控数据持久化与统计管理
  */
@@ -15,6 +25,13 @@ export class TelemetryStorage {
 
   private queryCounts = new Map<string, number>();
   private projectCounts = new Map<string, number>();
+
+  // 记录 Supabase 连接与写入健康状态
+  private supabaseStatus: SupabaseStorageStatus = {
+    configured: false,
+    urlProvided: false,
+    keyProvided: false,
+  };
 
   constructor(options?: { maxStoredEvents?: number }) {
     this.maxStoredEvents = options?.maxStoredEvents || 200;
@@ -64,14 +81,25 @@ export class TelemetryStorage {
    * 异步将原始事件批量持久化到 Supabase 数据表 mcp_telemetry_logs
    */
   public async saveToSupabase(events: McpTelemetryEvent[]): Promise<boolean> {
-    const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+    const supabaseUrl = (
+      process.env.SUPABASE_URL ||
+      process.env.NEXT_PUBLIC_SUPABASE_URL
+    )?.replace(/\/$/, "");
+
     const supabaseKey =
       process.env.SUPABASE_SERVICE_ROLE_KEY ||
       process.env.SUPABASE_KEY ||
-      process.env.SUPABASE_ANON_KEY;
+      process.env.SUPABASE_ANON_KEY ||
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    this.supabaseStatus.urlProvided = Boolean(supabaseUrl);
+    this.supabaseStatus.keyProvided = Boolean(supabaseKey);
+    this.supabaseStatus.configured = Boolean(supabaseUrl && supabaseKey);
+    this.supabaseStatus.lastAttemptTime = new Date().toISOString();
 
     if (!supabaseUrl || !supabaseKey) {
-      // 未配置 Supabase 环境变量，跳过持久化
+      this.supabaseStatus.lastSuccess = false;
+      this.supabaseStatus.lastError = `未检测到有效环境变量: URL=${Boolean(supabaseUrl)}, KEY=${Boolean(supabaseKey)}`;
       return false;
     }
 
@@ -118,12 +146,20 @@ export class TelemetryStorage {
 
       if (!res.ok) {
         const errorText = await res.text().catch(() => "");
+        this.supabaseStatus.lastSuccess = false;
+        this.supabaseStatus.lastStatusCode = res.status;
+        this.supabaseStatus.lastError = errorText || `HTTP status ${res.status}`;
         console.error(`[Supabase Storage Error] Status ${res.status}: ${errorText}`);
         return false;
       }
 
+      this.supabaseStatus.lastSuccess = true;
+      this.supabaseStatus.lastStatusCode = res.status;
+      this.supabaseStatus.lastError = undefined;
       return true;
     } catch (err: any) {
+      this.supabaseStatus.lastSuccess = false;
+      this.supabaseStatus.lastError = err.message || String(err);
       console.error("[Supabase Storage Network Error]", err.message || err);
       return false;
     }
@@ -155,7 +191,7 @@ export class TelemetryStorage {
   /**
    * 获取聚合状态指标
    */
-  public getStats(): CollectorStats {
+  public getStats(): CollectorStats & { supabase?: SupabaseStorageStatus } {
     const topQueries = Array.from(this.queryCounts.entries())
       .map(([query, count]) => ({ query, count }))
       .sort((a, b) => b.count - a.count)
@@ -181,6 +217,7 @@ export class TelemetryStorage {
       topQueries,
       topProjects,
       recentEvents: this.recentEvents.slice(0, 50),
+      supabase: this.supabaseStatus,
     };
   }
 
