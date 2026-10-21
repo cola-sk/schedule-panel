@@ -21,7 +21,7 @@ export class TelemetryStorage {
   }
 
   /**
-   * 写入事件
+   * 写入事件并持久化到 Supabase
    */
   public record(events: McpTelemetryEvent[]): void {
     for (const event of events) {
@@ -46,14 +46,86 @@ export class TelemetryStorage {
       const project = event.environment?.projectName || "unknown";
       this.projectCounts.set(project, (this.projectCounts.get(project) || 0) + 1);
 
-      // 维护环形最新事件列表
+      // 维护环形最新事件列表 (供内存 stats 快速展示)
       this.recentEvents.unshift(event);
       if (this.recentEvents.length > this.maxStoredEvents) {
         this.recentEvents.pop();
       }
 
-      // 控制台输出结构化 JSON 日志（Vercel Logs 及任何现代容器日志收集器均天然友好）
+      // 控制台输出结构化 JSON 日志（Vercel Logs）
       this.logToConsole(event);
+    }
+
+    // 异步非阻塞持久化到 Supabase（纯原生 REST API，零多余依赖）
+    void this.saveToSupabase(events);
+  }
+
+  /**
+   * 异步将原始事件批量持久化到 Supabase 数据表 mcp_telemetry_logs
+   */
+  public async saveToSupabase(events: McpTelemetryEvent[]): Promise<boolean> {
+    const supabaseUrl = process.env.SUPABASE_URL?.replace(/\/$/, "");
+    const supabaseKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      process.env.SUPABASE_KEY ||
+      process.env.SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      // 未配置 Supabase 环境变量，跳过持久化
+      return false;
+    }
+
+    try {
+      const rows = events.map((event) => ({
+        event_id: event.eventId,
+        created_at: event.timestamp || new Date().toISOString(),
+        tool_name: event.toolName,
+        duration_ms: event.durationMs || 0,
+        success: Boolean(event.success),
+        error_message: event.errorMessage || null,
+        client_type: event.environment?.clientType || null,
+        project_name: event.environment?.projectName || null,
+        git_repo: event.environment?.gitRepo || null,
+        git_branch: event.environment?.gitBranch || null,
+        platform: event.environment?.platform || null,
+        node_version: event.environment?.nodeVersion || null,
+        mcp_version: event.environment?.mcpVersion || null,
+        query: event.query || null,
+        has_indexed: event.hasIndexed !== undefined ? Boolean(event.hasIndexed) : null,
+        result_count: event.resultCount !== undefined ? event.resultCount : 0,
+        search_source: event.searchSource || null,
+        results_summary: event.resultsSummary || null,
+        metadata: event.metadata || {},
+      }));
+
+      const endpoint = `${supabaseUrl}/rest/v1/mcp_telemetry_logs`;
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      const timeout = controller ? setTimeout(() => controller.abort(), 4000) : null;
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify(rows),
+        signal: controller?.signal,
+      });
+
+      if (timeout) clearTimeout(timeout);
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => "");
+        console.error(`[Supabase Storage Error] Status ${res.status}: ${errorText}`);
+        return false;
+      }
+
+      return true;
+    } catch (err: any) {
+      console.error("[Supabase Storage Network Error]", err.message || err);
+      return false;
     }
   }
 
@@ -77,7 +149,6 @@ export class TelemetryStorage {
       error: event.errorMessage,
     };
 
-    // 单行格式化 JSON，便于 Vercel 日志过滤与聚合
     console.log(JSON.stringify(logEntry));
   }
 

@@ -67,6 +67,49 @@
 
 ---
 
+## 🗄️ Supabase 持久化配置
+
+收集服务支持将每次上报的原始数据自动异步持久化到 Supabase 数据表 `mcp_telemetry_logs` 中（基于 Supabase 标准 REST API，零多余依赖）。
+
+### 1. 在 Supabase 创建数据表
+在 Supabase 的 **SQL Editor** 中运行以下建表语句：
+```sql
+CREATE TABLE IF NOT EXISTS public.mcp_telemetry_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_id TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tool_name VARCHAR(64) NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    success BOOLEAN NOT NULL DEFAULT true,
+    error_message TEXT,
+    client_type VARCHAR(64),
+    project_name VARCHAR(128),
+    git_repo VARCHAR(255),
+    git_branch VARCHAR(128),
+    platform VARCHAR(32),
+    node_version VARCHAR(32),
+    mcp_version VARCHAR(32),
+    query TEXT,
+    has_indexed BOOLEAN,
+    result_count INTEGER DEFAULT 0,
+    search_source VARCHAR(64),
+    results_summary JSONB,
+    metadata JSONB DEFAULT '{}'::jsonb
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_logs_created_at ON public.mcp_telemetry_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mcp_logs_tool_name ON public.mcp_telemetry_logs (tool_name);
+CREATE INDEX IF NOT EXISTS idx_mcp_logs_query ON public.mcp_telemetry_logs (query) WHERE query IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_logs_has_indexed ON public.mcp_telemetry_logs (has_indexed) WHERE has_indexed IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_logs_project_name ON public.mcp_telemetry_logs (project_name);
+```
+
+### 2. 在 Vercel / 部署环境中配置环境变量
+- `SUPABASE_URL`: 你的 Supabase Project URL（如 `https://xxxx.supabase.co`）
+- `SUPABASE_KEY`: 你的 Supabase API Key（推荐使用 `service_role` key 或配置了 insert 策略的 `anon` key）
+
+---
+
 ## 🛠️ 本地运行与开发
 
 ```bash

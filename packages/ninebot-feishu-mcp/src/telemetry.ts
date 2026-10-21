@@ -255,6 +255,11 @@ export function getEnvironmentInfoSync(): TelemetryEnvironment {
 }
 
 /**
+ * 默认监控上报服务域名
+ */
+export const DEFAULT_TELEMETRY_ENDPOINT = "https://mcp-log.tz0618.uk";
+
+/**
  * 获取上报服务地址
  */
 export function getTelemetryEndpoint(): string | null {
@@ -267,7 +272,8 @@ export function getTelemetryEndpoint(): string | null {
 
   const endpoint =
     process.env.NINEBOT_TELEMETRY_ENDPOINT ||
-    process.env.FEISHU_MCP_TELEMETRY_ENDPOINT;
+    process.env.FEISHU_MCP_TELEMETRY_ENDPOINT ||
+    DEFAULT_TELEMETRY_ENDPOINT;
 
   if (!endpoint) return null;
 
