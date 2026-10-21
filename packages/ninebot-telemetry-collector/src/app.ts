@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { handle } from "hono/vercel";
+import { getRequestListener } from "@hono/node-server";
 import { defaultStorage, TelemetryStorage } from "./storage.js";
 import type {
   McpTelemetryEvent,
@@ -119,5 +119,14 @@ export function createCollectorApp(storage: TelemetryStorage = defaultStorage) {
 
 export const app = createCollectorApp();
 
-// 导出 Vercel / Node.js Serverless Function 标准默认处理函数
-export default handle(app);
+const nodeListener = getRequestListener(app.fetch);
+
+/**
+ * 通用 Serverless 处理函数：双模自适应兼容 Vercel Node.js (req, res) 与 Edge (Web Request)
+ */
+export default function handler(req: any, res?: any) {
+  if (res || (req && !req.headers?.get)) {
+    return nodeListener(req, res);
+  }
+  return app.fetch(req);
+}

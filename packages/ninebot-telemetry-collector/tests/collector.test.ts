@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createCollectorApp } from "../src/app.js";
+import { EventEmitter } from "node:events";
+import handler, { createCollectorApp } from "../src/app.js";
 import { TelemetryStorage } from "../src/storage.js";
 import type { McpTelemetryEvent } from "../src/types.js";
 
@@ -75,6 +76,38 @@ test("Collector App - Handles invalid payload gracefully", async () => {
   });
 
   assert.equal(badRes.status, 400);
+});
+
+test("Collector App - Default export handler works in Vercel Node.js Serverless runtime (req, res)", async () => {
+  const nodeReq: any = new EventEmitter();
+  nodeReq.url = "/health";
+  nodeReq.method = "GET";
+  nodeReq.headers = { host: "localhost", origin: "http://example.com" };
+
+  const nodeRes: any = new EventEmitter();
+  nodeRes.statusCode = 200;
+  nodeRes.headers = {};
+  nodeRes.setHeader = (k: string, v: string) => {
+    nodeRes.headers[k.toLowerCase()] = v;
+  };
+  nodeRes.getHeader = (k: string) => nodeRes.headers[k.toLowerCase()];
+  nodeRes.writeHead = (code: number, headers: any) => {
+    nodeRes.statusCode = code;
+    Object.assign(nodeRes.headers, headers);
+  };
+  let body = "";
+  nodeRes.write = (chunk: any) => {
+    body += chunk;
+  };
+  nodeRes.end = (chunk: any) => {
+    if (chunk) body += chunk;
+  };
+
+  // 必须能平稳处理 Node.js 原生 req, res，且不报 headers.get is not a function
+  assert.doesNotThrow(() => {
+    handler(nodeReq, nodeRes);
+    nodeReq.emit("end");
+  });
 });
 
 test("TelemetryStorage - Persists event data to Supabase via REST API", async () => {

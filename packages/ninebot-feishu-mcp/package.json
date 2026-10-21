@@ -1,6 +1,6 @@
 {
   "name": "@ninebot/feishu-mcp",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "九号前端团队飞书知识库与工程规范 MCP (Model Context Protocol) 服务",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
