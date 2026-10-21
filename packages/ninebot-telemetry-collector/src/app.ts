@@ -93,9 +93,11 @@ export function createCollectorApp(storage: TelemetryStorage = defaultStorage) {
 
   app.post("/api/v1/report", handleReport);
   app.post("/api/report", handleReport);
+  app.post("/v1/report", handleReport);
+  app.post("/report", handleReport);
 
   // 3. 统计概览查询
-  app.get("/api/v1/stats", (c) => {
+  const handleStats = (c: any) => {
     // 若配置了 STATS_TOKEN，可进行轻量权限保护
     const requiredToken = process.env.TELEMETRY_STATS_TOKEN;
     if (requiredToken) {
@@ -112,7 +114,12 @@ export function createCollectorApp(storage: TelemetryStorage = defaultStorage) {
       stats,
       generatedAt: new Date().toISOString(),
     });
-  });
+  };
+
+  app.get("/api/v1/stats", handleStats);
+  app.get("/api/stats", handleStats);
+  app.get("/v1/stats", handleStats);
+  app.get("/stats", handleStats);
 
   return app;
 }
