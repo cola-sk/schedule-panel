@@ -75,11 +75,11 @@ export function createFeishuMcpServer(): McpServer {
   // 1. 读取飞书文档或表格
   server.tool(
     "feishu_read_document",
-    "读取飞书云文档 (Docx)、电子表格 (Sheet) 或多维表格 (Bitable/Base) 的内容，并转换为结构良好的 Markdown 格式或纯文本",
+    "读取飞书云文档 (Docx)、电子表格 (Sheet)、多维表格 (Bitable/Base) 或知识库/云空间挂载文件 (如 .md/.txt 等文件) 的内容，并转换为结构良好的 Markdown 格式或纯文本",
     {
       document_id_or_url: z
         .string()
-        .describe("飞书文档或表格的 URL（如 https://.../docx/xxx、/wiki/xxx 或 /base/xxx）或 document_id / wiki_token / app_token"),
+        .describe("飞书文档、表格或文件的 URL（如 https://.../docx/xxx、/wiki/xxx、/base/xxx 或 /file/xxx）或 document_id / wiki_token / app_token / file_token"),
       format: z
         .enum(["markdown", "text", "raw_blocks"])
         .default("markdown")
