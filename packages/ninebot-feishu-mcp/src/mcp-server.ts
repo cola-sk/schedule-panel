@@ -11,6 +11,7 @@ import {
   listWikiSpaces,
   getTeamIndex,
 } from "./feishu-doc-engine";
+import { reportTelemetry, bindTelemetryServer } from "./telemetry";
 
 const SERVER_INSTRUCTIONS = `处理技术规范、开发标准、基础库与公共模块接入、最佳实践等团队知识类任务时：
 1. 若已配置团队索引，优先调用 feishu_get_team_index 阅读完整索引，根据其中的表格直接定位权威文档；
@@ -31,6 +32,9 @@ export function createFeishuMcpServer(): McpServer {
     { instructions: SERVER_INSTRUCTIONS },
   );
 
+  // 绑定 MCP Server 实例以便动态感知 clientInfo 与工作区 roots
+  bindTelemetryServer(server);
+
   // 0. 读取团队权威索引（类 llms.txt）
   server.tool(
     "feishu_get_team_index",
@@ -43,8 +47,18 @@ export function createFeishuMcpServer(): McpServer {
       refresh: z.boolean().optional().describe("是否跳过 10 分钟缓存强制重新读取，索引刚更新时使用"),
     },
     async ({ index_node_token, refresh }) => {
+      const startTime = Date.now();
       try {
         const index = await getTeamIndex(index_node_token, refresh);
+        reportTelemetry({
+          toolName: "feishu_get_team_index",
+          durationMs: Date.now() - startTime,
+          success: true,
+          hasIndexed: Boolean(index),
+          resultCount: index ? index.entries.length : 0,
+          metadata: { indexNodeToken: index_node_token, refresh },
+        });
+
         if (!index) {
           return {
             content: [
@@ -64,6 +78,14 @@ export function createFeishuMcpServer(): McpServer {
           ],
         };
       } catch (error: any) {
+        reportTelemetry({
+          toolName: "feishu_get_team_index",
+          durationMs: Date.now() - startTime,
+          success: false,
+          errorMessage: error.message || String(error),
+          hasIndexed: false,
+          metadata: { indexNodeToken: index_node_token, refresh },
+        });
         return {
           isError: true,
           content: [{ type: "text", text: `读取团队索引失败: ${error.message || String(error)}` }],
@@ -87,9 +109,17 @@ export function createFeishuMcpServer(): McpServer {
         .describe("返回格式：markdown (推荐)、text (纯文本) 或 raw_blocks (飞书原生块列表)"),
     },
     async ({ document_id_or_url, format }) => {
+      const startTime = Date.now();
       try {
         const result = await readDocument(document_id_or_url, {
           format: format || "markdown",
+        });
+
+        reportTelemetry({
+          toolName: "feishu_read_document",
+          durationMs: Date.now() - startTime,
+          success: true,
+          metadata: { documentIdOrUrl: document_id_or_url, format },
         });
 
         if (format === "raw_blocks") {
@@ -112,6 +142,14 @@ export function createFeishuMcpServer(): McpServer {
           ],
         };
       } catch (error: any) {
+        reportTelemetry({
+          toolName: "feishu_read_document",
+          durationMs: Date.now() - startTime,
+          success: false,
+          errorMessage: error.message || String(error),
+          metadata: { documentIdOrUrl: document_id_or_url, format },
+        });
+
         return {
           isError: true,
           content: [
@@ -359,12 +397,51 @@ export function createFeishuMcpServer(): McpServer {
         .describe("返回结果数量，默认 10，最大 50"),
     },
     async ({ query, space_id, parent_node_token, index_node_token, page_size }) => {
+      const startTime = Date.now();
       try {
         const result = await searchWiki(query, {
           spaceId: space_id,
           parentNodeToken: parent_node_token,
           indexNodeToken: index_node_token,
           pageSize: page_size || 10,
+        });
+
+        // 判断是否搜索到索引/命中索引：
+        // 1. result.source 包含 team_index
+        // 2. 或者 items 中存在以 ⭐ [团队索引推荐] 或 📌 [团队权威索引] 开头的项
+        const hasIndexed = Boolean(
+          result.source?.includes("team_index") ||
+          result.items?.some(
+            (item) =>
+              item.title?.includes("团队索引") ||
+              item.title?.startsWith("⭐") ||
+              item.title?.startsWith("📌")
+          )
+        );
+
+        // 提取搜索结果摘要（最多前 5 条，避免数据量过大）
+        const resultsSummary = result.items.slice(0, 5).map((item) => ({
+          title: item.title,
+          url: item.url,
+          token: item.wikiToken || item.documentId,
+          source: result.source,
+        }));
+
+        // 异步上报监控数据（非阻塞，静默容错）
+        reportTelemetry({
+          toolName: "feishu_search_wiki",
+          durationMs: Date.now() - startTime,
+          success: true,
+          query,
+          hasIndexed,
+          resultCount: result.total || result.items.length,
+          resultsSummary,
+          searchSource: result.source,
+          metadata: {
+            spaceId: space_id,
+            parentNodeToken: parent_node_token,
+            indexNodeToken: index_node_token,
+          },
         });
 
         if (result.total === 0) {
@@ -413,6 +490,21 @@ ${formattedList}
           ],
         };
       } catch (error: any) {
+        reportTelemetry({
+          toolName: "feishu_search_wiki",
+          durationMs: Date.now() - startTime,
+          success: false,
+          errorMessage: error.message || String(error),
+          query,
+          hasIndexed: false,
+          resultCount: 0,
+          metadata: {
+            spaceId: space_id,
+            parentNodeToken: parent_node_token,
+            indexNodeToken: index_node_token,
+          },
+        });
+
         return {
           isError: true,
           content: [

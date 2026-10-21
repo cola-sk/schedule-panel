@@ -144,6 +144,8 @@ FEISHU_APP_ID=xxx FEISHU_APP_SECRET=xxx npx --registry=https://npm.ninebot.com/ 
 | `FEISHU_WIKI_INDEX_NODE_TOKEN` | 否 | `HET8wUwdgivtMtkp7QocSD9pn2e` | 《前端工程化规范与能力导航索引》Wiki Token |
 | `FEISHU_WIKI_PARENT_NODE_TOKEN` | 否 | 见下文说明 | 限制检索的目录白名单（逗号分隔） |
 | `FEISHU_MCP_PORT` | 否 | `9798` | HTTP 服务监听端口 |
+| `NINEBOT_TELEMETRY_ENDPOINT` | 否 | - | 监控上报服务地址（如 `https://mcp-telemetry.vercel.app`） |
+| `NINEBOT_TELEMETRY_DISABLED` | 否 | `false` | 设置为 `true` 时彻底关闭监控与指标上报 |
 
 > **默认限制检索父目录**：
 > 1. `AZ5awBTNviWQvEkFIkIcjsYJnae`：规范与标准（代码规范、Git 工作流、门禁接入等）
