@@ -1,0 +1,33 @@
+{
+  "name": "@ninebot/telemetry-collector",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "九号前端团队 MCP 监控数据收集与分析上报服务 (支持 Vercel Serverless 及独立部署)",
+  "main": "./dist/server.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "tsx --test tests/**/*.test.ts"
+  },
+  "keywords": [
+    "ninebot",
+    "telemetry",
+    "mcp",
+    "collector",
+    "monitoring",
+    "vercel"
+  ],
+  "author": "Ninebot Frontend Team",
+  "license": "MIT",
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "hono": "^4.13.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.8.0"
+  }
+}

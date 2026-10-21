@@ -38,7 +38,7 @@ export function getFeishuClient(): lark.Client {
 
 export interface ParsedTarget {
   raw: string;
-  type: "docx" | "wiki" | "sheet" | "bitable" | "unknown";
+  type: "docx" | "wiki" | "sheet" | "bitable" | "file" | "unknown";
   documentId?: string;
   wikiToken?: string;
   appToken?: string;
@@ -109,6 +109,16 @@ export function parseDocumentTarget(urlOrToken: string): ParsedTarget {
     };
   }
 
+  // 云空间文件链接 /file/
+  if (trimmed.includes("/file/")) {
+    const match = trimmed.match(/\/file\/([a-zA-Z0-9_-]+)/);
+    return {
+      raw: trimmed,
+      type: "file",
+      documentId: match ? match[1] : undefined,
+    };
+  }
+
   // Docx 链接
   if (trimmed.includes("/docx/") || trimmed.includes("/docs/")) {
     const match = trimmed.match(/\/(?:docx|docs)\/([a-zA-Z0-9_-]+)/);
@@ -122,6 +132,10 @@ export function parseDocumentTarget(urlOrToken: string): ParsedTarget {
   // 纯 Token 直接输入
   if (/^wik[a-zA-Z0-9_-]+$/.test(trimmed)) {
     return { raw: trimmed, type: "wiki", wikiToken: trimmed };
+  }
+
+  if (/^(?:box)[a-zA-Z0-9_-]+$/.test(trimmed)) {
+    return { raw: trimmed, type: "file", documentId: trimmed };
   }
 
   if (/^(?:dox|doc)[a-zA-Z0-9_-]+$/.test(trimmed)) {
@@ -140,8 +154,8 @@ export function parseDocumentTarget(urlOrToken: string): ParsedTarget {
 }
 
 export interface ResolvedTarget {
-  objType: "docx" | "sheet" | "bitable";
-  token: string; // 实际的对象 Token (documentId 或 appToken)
+  objType: "docx" | "sheet" | "bitable" | "file";
+  token: string; // 实际的对象 Token (documentId, appToken 或 fileToken)
   wikiToken?: string;
   title?: string;
   tableId?: string;
@@ -186,7 +200,8 @@ export async function resolveDocumentTarget(
     const objType =
       rawObjType === "doc" ? "docx" :
       rawObjType === "base" ? "bitable" :
-      (rawObjType as "docx" | "sheet" | "bitable" | undefined);
+      rawObjType === "file" ? "file" :
+      (rawObjType as "docx" | "sheet" | "bitable" | "file" | undefined);
     const title = nodeRes.data?.node?.title;
 
     if (!objToken) {
@@ -194,12 +209,19 @@ export async function resolveDocumentTarget(
     }
 
     return {
-      objType: (objType || "docx") as "docx" | "sheet" | "bitable",
+      objType: (objType || "docx") as "docx" | "sheet" | "bitable" | "file",
       token: objToken,
       wikiToken: parsed.wikiToken,
       title: title || undefined,
       tableId: parsed.tableId,
       sheetId: parsed.sheetId,
+    };
+  }
+
+  if (parsed.type === "file" && parsed.documentId) {
+    return {
+      objType: "file",
+      token: parsed.documentId,
     };
   }
 
@@ -797,12 +819,14 @@ export async function getDocumentInfo(documentIdOrUrl: string) {
       token: target.token,
       wikiToken: target.wikiToken,
       type: target.objType,
-      title: target.title || (target.objType === "sheet" ? "电子表格" : "多维表格"),
+      title: target.title || (target.objType === "sheet" ? "电子表格" : target.objType === "bitable" ? "多维表格" : "文件"),
       url: target.wikiToken
         ? `https://open.feishu.cn/wiki/${target.wikiToken}`
         : target.objType === "sheet"
         ? `https://open.feishu.cn/sheets/${target.token}`
-        : `https://open.feishu.cn/base/${target.token}`,
+        : target.objType === "bitable"
+        ? `https://open.feishu.cn/base/${target.token}`
+        : `https://open.feishu.cn/file/${target.token}`,
     };
   }
 
@@ -1329,6 +1353,70 @@ export async function updateBitableRecords(
 }
 
 /**
+ * 流转 Buffer
+ */
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
+/**
+ * 读取飞书云空间或知识库中挂载的文件 (如 .md、.txt 等)
+ */
+async function readFileAsContent(
+  client: lark.Client,
+  fileToken: string,
+  title?: string,
+  wikiToken?: string,
+  format: "markdown" | "text" | "raw_blocks" = "markdown",
+): Promise<{
+  documentId: string;
+  wikiToken?: string;
+  title: string;
+  format: string;
+  content: string;
+  blocks?: any[];
+  blockCount?: number;
+}> {
+  let downloadRes;
+  try {
+    downloadRes = await client.drive.file.download({
+      path: { file_token: fileToken },
+    });
+  } catch (error: any) {
+    throw new Error(formatLarkError(error, `下载文件内容失败 (file_token: ${fileToken})`));
+  }
+
+  const stream = downloadRes.getReadableStream();
+  const buffer = await streamToBuffer(stream);
+  const textContent = buffer.toString("utf-8");
+  const fileTitle = title || "文件";
+
+  if (format === "raw_blocks") {
+    return {
+      documentId: fileToken,
+      wikiToken,
+      title: fileTitle,
+      format: "raw_blocks",
+      blockCount: 0,
+      blocks: [],
+      content: textContent,
+    };
+  }
+
+  return {
+    documentId: fileToken,
+    wikiToken,
+    title: fileTitle,
+    format: format === "text" ? "text" : "markdown",
+    content: textContent,
+  };
+}
+
+/**
  * 读取飞书文档、表格或知识库内容
  */
 export async function readDocument(
@@ -1375,7 +1463,18 @@ export async function readDocument(
     };
   }
 
-  // 3. 目标为 Docx 云文档
+  // 3. 如果目标是文件 File (如 Wiki 中直接上传挂载的 .md / .txt 等)
+  if (target.objType === "file") {
+    return await readFileAsContent(
+      client,
+      target.token,
+      target.title,
+      target.wikiToken,
+      format,
+    );
+  }
+
+  // 4. 目标为 Docx 云文档
   const documentId = target.token;
   const wikiToken = target.wikiToken;
   let title = target.title;
@@ -1423,10 +1522,24 @@ export async function readDocument(
         },
       });
     } catch (error: any) {
+      if (error?.code === 1770002 || String(error?.message).includes("1770002")) {
+        try {
+          return await readFileAsContent(client, documentId, title, wikiToken, format);
+        } catch {
+          // ignore fallback error and throw original
+        }
+      }
       throw new Error(formatLarkError(error, `读取文档块列表失败 (document_id: ${documentId})`));
     }
 
     if (blockRes.code !== 0) {
+      if (blockRes.code === 1770002 || String(blockRes.msg).includes("1770002")) {
+        try {
+          return await readFileAsContent(client, documentId, title, wikiToken, format);
+        } catch {
+          // ignore fallback error
+        }
+      }
       throw new Error(formatLarkError(blockRes, `读取文档块列表失败 (document_id: ${documentId})`));
     }
 
@@ -1518,6 +1631,10 @@ export async function appendDocumentContent(
 ) {
   const client = getFeishuClient();
   const target = await resolveDocumentTarget(client, documentIdOrUrl);
+
+  if (target.objType === "file") {
+    throw new Error("暂不支持向飞书文件节点 (file) 追加内容，请通过云文档 (Docx) 操作。");
+  }
 
   // 如果目标是多维表格 Bitable
   if (target.objType === "bitable") {
@@ -1946,6 +2063,10 @@ export async function updateDocumentContent(
 ) {
   const client = getFeishuClient();
   const target = await resolveDocumentTarget(client, documentIdOrUrl);
+
+  if (target.objType === "file") {
+    throw new Error("暂不支持向飞书文件节点 (file) 追加内容，请通过云文档 (Docx) 操作。");
+  }
 
   // 如果目标是多维表格 Bitable
   if (target.objType === "bitable") {
