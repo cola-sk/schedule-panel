@@ -78,7 +78,7 @@ export function createCollectorApp(storage: TelemetryStorage = defaultStorage) {
         return c.json({ success: false, error: "No valid telemetry events provided" }, 400);
       }
 
-      storage.record(validEvents);
+      await storage.record(validEvents);
 
       const response: TelemetryReportResponse = {
         success: true,

@@ -65,7 +65,7 @@ export class TelemetryStorage {
   /**
    * 写入事件并持久化到 Supabase
    */
-  public record(events: McpTelemetryEvent[]): void {
+  public async record(events: McpTelemetryEvent[]): Promise<void> {
     for (const event of events) {
       this.totalCount++;
       if (event.success) {
@@ -98,12 +98,12 @@ export class TelemetryStorage {
       this.logToConsole(event);
     }
 
-    // 异步非阻塞持久化到 Supabase（纯原生 REST API，零多余依赖）
-    void this.saveToSupabase(events);
+    // 确保在 Serverless 容器响应前完成入库，避免容器冻结导致 abort
+    await this.saveToSupabase(events);
   }
 
   /**
-   * 异步将原始事件批量持久化到 Supabase 数据表 mcp_telemetry_logs
+   * 将原始事件批量持久化到 Supabase 数据表 mcp_telemetry_logs
    */
   public async saveToSupabase(events: McpTelemetryEvent[]): Promise<boolean> {
     const { url: supabaseUrl, key: supabaseKey } = this.getSupabaseCredentials();
@@ -114,6 +114,9 @@ export class TelemetryStorage {
       this.lastError = `未检测到有效环境变量: URL=${Boolean(supabaseUrl)}, KEY=${Boolean(supabaseKey)}`;
       return false;
     }
+
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeout = controller ? setTimeout(() => controller.abort(), 6000) : null;
 
     try {
       const rows = events.map((event) => ({
@@ -139,8 +142,6 @@ export class TelemetryStorage {
       }));
 
       const endpoint = `${supabaseUrl}/rest/v1/mcp_telemetry_logs`;
-      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      const timeout = controller ? setTimeout(() => controller.abort(), 4000) : null;
 
       const res = await fetch(endpoint, {
         method: "POST",
@@ -153,8 +154,6 @@ export class TelemetryStorage {
         body: JSON.stringify(rows),
         signal: controller?.signal,
       });
-
-      if (timeout) clearTimeout(timeout);
 
       if (!res.ok) {
         const errorText = await res.text().catch(() => "");
@@ -174,6 +173,8 @@ export class TelemetryStorage {
       this.lastError = err.message || String(err);
       console.error("[Supabase Storage Network Error]", err.message || err);
       return false;
+    } finally {
+      if (timeout) clearTimeout(timeout);
     }
   }
 
