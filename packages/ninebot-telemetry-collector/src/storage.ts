@@ -4,6 +4,7 @@ export interface SupabaseStorageStatus {
   configured: boolean;
   urlProvided: boolean;
   keyProvided: boolean;
+  detectedEnvVars?: string[];
   lastAttemptTime?: string;
   lastSuccess?: boolean;
   lastStatusCode?: number;
@@ -26,15 +27,39 @@ export class TelemetryStorage {
   private queryCounts = new Map<string, number>();
   private projectCounts = new Map<string, number>();
 
-  // 记录 Supabase 连接与写入健康状态
-  private supabaseStatus: SupabaseStorageStatus = {
-    configured: false,
-    urlProvided: false,
-    keyProvided: false,
-  };
+  // 记录 Supabase 写入记录
+  private lastAttemptTime?: string;
+  private lastSuccess?: boolean;
+  private lastStatusCode?: number;
+  private lastError?: string;
 
   constructor(options?: { maxStoredEvents?: number }) {
     this.maxStoredEvents = options?.maxStoredEvents || 200;
+  }
+
+  /**
+   * 动态解析当前环境中的 Supabase 凭证
+   */
+  public getSupabaseCredentials(): { url?: string; key?: string; detectedKeys: string[] } {
+    const env = process.env;
+    const detectedKeys = Object.keys(env).filter(
+      (k) => k.includes("SUPABASE") || k.includes("POSTGRES")
+    );
+
+    const url = (
+      env.SUPABASE_URL ||
+      env.NEXT_PUBLIC_SUPABASE_URL ||
+      env.SUPABASE_REST_URL
+    )?.replace(/\/$/, "");
+
+    const key =
+      env.SUPABASE_SERVICE_ROLE_KEY ||
+      env.SUPABASE_KEY ||
+      env.SUPABASE_ANON_KEY ||
+      env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+      env.SUPABASE_API_KEY;
+
+    return { url, key, detectedKeys };
   }
 
   /**
@@ -81,25 +106,12 @@ export class TelemetryStorage {
    * 异步将原始事件批量持久化到 Supabase 数据表 mcp_telemetry_logs
    */
   public async saveToSupabase(events: McpTelemetryEvent[]): Promise<boolean> {
-    const supabaseUrl = (
-      process.env.SUPABASE_URL ||
-      process.env.NEXT_PUBLIC_SUPABASE_URL
-    )?.replace(/\/$/, "");
-
-    const supabaseKey =
-      process.env.SUPABASE_SERVICE_ROLE_KEY ||
-      process.env.SUPABASE_KEY ||
-      process.env.SUPABASE_ANON_KEY ||
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    this.supabaseStatus.urlProvided = Boolean(supabaseUrl);
-    this.supabaseStatus.keyProvided = Boolean(supabaseKey);
-    this.supabaseStatus.configured = Boolean(supabaseUrl && supabaseKey);
-    this.supabaseStatus.lastAttemptTime = new Date().toISOString();
+    const { url: supabaseUrl, key: supabaseKey } = this.getSupabaseCredentials();
+    this.lastAttemptTime = new Date().toISOString();
 
     if (!supabaseUrl || !supabaseKey) {
-      this.supabaseStatus.lastSuccess = false;
-      this.supabaseStatus.lastError = `未检测到有效环境变量: URL=${Boolean(supabaseUrl)}, KEY=${Boolean(supabaseKey)}`;
+      this.lastSuccess = false;
+      this.lastError = `未检测到有效环境变量: URL=${Boolean(supabaseUrl)}, KEY=${Boolean(supabaseKey)}`;
       return false;
     }
 
@@ -146,20 +158,20 @@ export class TelemetryStorage {
 
       if (!res.ok) {
         const errorText = await res.text().catch(() => "");
-        this.supabaseStatus.lastSuccess = false;
-        this.supabaseStatus.lastStatusCode = res.status;
-        this.supabaseStatus.lastError = errorText || `HTTP status ${res.status}`;
+        this.lastSuccess = false;
+        this.lastStatusCode = res.status;
+        this.lastError = errorText || `HTTP status ${res.status}`;
         console.error(`[Supabase Storage Error] Status ${res.status}: ${errorText}`);
         return false;
       }
 
-      this.supabaseStatus.lastSuccess = true;
-      this.supabaseStatus.lastStatusCode = res.status;
-      this.supabaseStatus.lastError = undefined;
+      this.lastSuccess = true;
+      this.lastStatusCode = res.status;
+      this.lastError = undefined;
       return true;
     } catch (err: any) {
-      this.supabaseStatus.lastSuccess = false;
-      this.supabaseStatus.lastError = err.message || String(err);
+      this.lastSuccess = false;
+      this.lastError = err.message || String(err);
       console.error("[Supabase Storage Network Error]", err.message || err);
       return false;
     }
@@ -189,7 +201,7 @@ export class TelemetryStorage {
   }
 
   /**
-   * 获取聚合状态指标
+   * 获取聚合状态指标（含实时 Supabase 诊断）
    */
   public getStats(): CollectorStats & { supabase?: SupabaseStorageStatus } {
     const topQueries = Array.from(this.queryCounts.entries())
@@ -207,6 +219,19 @@ export class TelemetryStorage {
         ? `${((this.indexHitCount / this.searchCount) * 100).toFixed(1)}%`
         : "N/A";
 
+    const { url, key, detectedKeys } = this.getSupabaseCredentials();
+
+    const supabaseStatus: SupabaseStorageStatus = {
+      configured: Boolean(url && key),
+      urlProvided: Boolean(url),
+      keyProvided: Boolean(key),
+      detectedEnvVars: detectedKeys,
+      lastAttemptTime: this.lastAttemptTime,
+      lastSuccess: this.lastSuccess,
+      lastStatusCode: this.lastStatusCode,
+      lastError: this.lastError,
+    };
+
     return {
       totalEvents: this.totalCount,
       successfulEvents: this.successCount,
@@ -217,7 +242,7 @@ export class TelemetryStorage {
       topQueries,
       topProjects,
       recentEvents: this.recentEvents.slice(0, 50),
-      supabase: this.supabaseStatus,
+      supabase: supabaseStatus,
     };
   }
 
