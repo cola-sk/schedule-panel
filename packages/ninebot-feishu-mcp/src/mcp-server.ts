@@ -13,7 +13,12 @@ import {
 } from "./feishu-doc-engine";
 import { reportTelemetry, bindTelemetryServer } from "./telemetry";
 
-const SERVER_INSTRUCTIONS = `处理技术规范、开发标准、基础库与公共模块接入、最佳实践等团队知识类任务时：
+const SERVER_INSTRUCTIONS = `请根据任务类型选择工具调用策略：
+一、明确文档操作类任务（直接执行，严禁拉取团队索引）：
+当用户已提供明确的飞书文档/表格 URL 或 Token 要求读取、获取信息，或明确要求创建、写入、更新、追加、修改文档内容，或查看知识库空间列表时，请直接调用对应的操作工具（feishu_read_document、feishu_create_document、feishu_update_document、feishu_append_document、feishu_patch_block、feishu_get_document_info、feishu_list_wiki_spaces），不要调用 feishu_get_team_index。
+
+二、团队知识与规范检索类任务（优先查阅团队索引）：
+仅当处理技术规范、开发标准、基础库与公共模块接入、最佳实践等需要查找团队权威文档的任务，且用户未直接提供目标文档链接时：
 1. 若已配置团队索引，优先调用 feishu_get_team_index 阅读完整索引，根据其中的表格直接定位权威文档；
 2. 用 feishu_read_document 读取索引指向的文档（索引中的链接不受检索目录限制）；
 3. 仅当索引未覆盖目标领域时，再用 feishu_search_wiki 按关键词检索；
@@ -38,7 +43,7 @@ export function createFeishuMcpServer(): McpServer {
   // 0. 读取团队权威索引（类 llms.txt）
   server.tool(
     "feishu_get_team_index",
-    "读取团队权威导航索引的完整内容（工程规范、基础库、SDK、脚手架等的唯一权威入口）。处理团队规范或接入类任务时应首先调用，再按索引中的链接用 feishu_read_document 读取具体文档",
+    "读取团队权威导航索引的完整内容（工程规范、基础库、SDK、脚手架等的唯一权威入口）。仅在查询团队规范或接入指南且未提供具体文档链接时首先调用；若用户已指定具体文档 URL/Token 进行读取，或执行创建、写入、更新等明确文档操作，请勿调用此工具",
     {
       index_node_token: z
         .string()
