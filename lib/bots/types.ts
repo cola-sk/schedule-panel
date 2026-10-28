@@ -42,6 +42,7 @@ export interface BotDefinition {
     rotationStartAt?: string;
     currentIndex?: number;
     initialMembers?: RotationMember[];
+    meetingDocumentUrl?: string;
     sourceDocumentId?: string;
     targetFolderId?: string;
   };

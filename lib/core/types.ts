@@ -24,6 +24,7 @@ export interface ReminderSchedule {
   botId: string;
   type?: "rotation_reminder" | "weekly_report" | string;
   documentId?: string;
+  meetingDocumentUrl?: string;
   sourceDocumentId?: string;
   targetFolderId?: string;
   titleTemplate?: string;

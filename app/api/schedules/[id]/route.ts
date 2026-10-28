@@ -21,6 +21,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
   // 2. 更新基础配置
   const documentId = typeof body.documentId === "string" ? body.documentId.trim() : undefined;
+  const meetingDocumentUrl = typeof body.meetingDocumentUrl === "string" ? body.meetingDocumentUrl.trim() : undefined;
   const sourceDocumentId = typeof body.sourceDocumentId === "string" ? body.sourceDocumentId.trim() : undefined;
   const targetFolderId = typeof body.targetFolderId === "string" ? body.targetFolderId.trim() : undefined;
   const name = typeof body.name === "string" ? body.name.trim() : undefined;
@@ -33,6 +34,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   };
   if (name) changes.name = name;
   if (documentId !== undefined) changes.documentId = documentId;
+  if (meetingDocumentUrl !== undefined) changes.meetingDocumentUrl = meetingDocumentUrl;
   if (sourceDocumentId !== undefined) changes.sourceDocumentId = sourceDocumentId;
   if (targetFolderId !== undefined) changes.targetFolderId = targetFolderId;
   if (body.atAll !== undefined) changes.atAll = Boolean(body.atAll);

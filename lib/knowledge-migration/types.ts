@@ -195,8 +195,11 @@ export interface TaskNotifyConfig {
   lastScheduledSentAt?: string; // 上次定时任务成功派发时间戳（手动测试不更新，确保不影响定时任务）
   sendMode?: "both" | "image_only" | "text_only"; // 图文一起发送 (默认 both) | 仅发送长图 | 仅发送文字卡片
   atAll?: boolean; // 发送通知时是否 @ 所有人
-  atZeroContributors?: boolean; // 发送通知时是否 @ 没有完成个人迁移且贡献为0的员工
-  zeroNoticeMessage?: string; // 催办提示文案
+  atIncompleteMembers?: boolean; // 发送通知时是否 @ 提醒未完成迁移任务的人名
+  atIncompleteMode?: "all_incomplete" | "zero_only"; // 待提醒人员范围：所有未完成迁移任务的人员 (默认) | 仅未完成且贡献为0
+  atZeroContributors?: boolean; // 兼容旧字段：发送通知时是否 @ 没有完成个人迁移且贡献为0的员工
+  incompleteNoticeMessage?: string; // 催办未完成迁移人员提示文案
+  zeroNoticeMessage?: string; // 兼容旧字段：催办提示文案
   silentDailyScanEnabled?: boolean; // 每日 23:50 是否自动执行静默巡检扫描（锁定入库时间，不发送任何群通知）
   lastSilentScannedAt?: string; // 上次成功静默巡检扫描的时间戳
 }

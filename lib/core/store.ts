@@ -90,7 +90,14 @@ function persistStore(state: GlobalStore) {
 }
 
 function initStore(): GlobalStore {
-  if (global.__febotCoreStore__) return global.__febotCoreStore__;
+  if (global.__febotCoreStore__) {
+    global.__febotCoreStore__.schedules.forEach((s) => {
+      if ((s.type === "rotation_reminder" || s.id === "febot-schedule") && !s.meetingDocumentUrl) {
+        s.meetingDocumentUrl = "https://segway-ninebot.feishu.cn/wiki/G0vTwWW0giLXfukeROWc7kfmntb";
+      }
+    });
+    return global.__febotCoreStore__;
+  }
 
   // 1. 先尝试从本地文件恢复配置与历史记录
   const configFromFile = loadConfigFromFile();
@@ -123,6 +130,7 @@ function initStore(): GlobalStore {
           botId: def.id,
           type: def.defaultSchedule.type || (def.id === "weekly-report" ? "weekly_report" : "rotation_reminder"),
           documentId: def.defaultDocumentId,
+          meetingDocumentUrl: def.defaultSchedule.meetingDocumentUrl || (cfg?.schedule as any)?.meetingDocumentUrl || "",
           sourceDocumentId: def.defaultSchedule.sourceDocumentId || (cfg?.schedule as any)?.sourceDocumentId || "",
           targetFolderId: def.defaultSchedule.targetFolderId || (cfg?.schedule as any)?.targetFolderId || "",
           dayOfWeek: def.defaultSchedule.dayOfWeek,
@@ -144,6 +152,13 @@ function initStore(): GlobalStore {
       }
       if (!s.type) {
         s.type = s.id.includes("weekly-report") ? "weekly_report" : "rotation_reminder";
+        hasNew = true;
+      }
+      if (s.type === "rotation_reminder" && !s.meetingDocumentUrl) {
+        const def = registered.find((d) => d.id === s.botId || `${d.id}-schedule` === s.id);
+        s.meetingDocumentUrl =
+          def?.defaultSchedule?.meetingDocumentUrl ||
+          "https://segway-ninebot.feishu.cn/wiki/G0vTwWW0giLXfukeROWc7kfmntb";
         hasNew = true;
       }
     });
@@ -175,6 +190,7 @@ function initStore(): GlobalStore {
         botId: def.id,
         type: def.defaultSchedule.type || (def.id === "weekly-report" ? "weekly_report" : "rotation_reminder"),
         documentId: def.defaultDocumentId,
+        meetingDocumentUrl: def.defaultSchedule.meetingDocumentUrl || (cfg?.schedule as any)?.meetingDocumentUrl || "",
         sourceDocumentId: def.defaultSchedule.sourceDocumentId || (cfg?.schedule as any)?.sourceDocumentId || "",
         targetFolderId: def.defaultSchedule.targetFolderId || (cfg?.schedule as any)?.targetFolderId || "",
         dayOfWeek: def.defaultSchedule.dayOfWeek,

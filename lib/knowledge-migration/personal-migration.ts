@@ -133,6 +133,7 @@ export function getTaskMemberContributionStatus(taskId: string) {
   });
 
   const zeroContributors = items.filter((item) => item.isZeroAndIncomplete);
+  const incompleteMembers = items.filter((item) => !item.completed);
   const completedCount = items.filter((item) => item.completed).length;
 
   return {
@@ -141,6 +142,7 @@ export function getTaskMemberContributionStatus(taskId: string) {
       total: items.length,
       completed: completedCount,
       incomplete: items.length - completedCount,
+      incompleteMembers,
       zeroContributorsAndIncomplete: zeroContributors.length,
       zeroContributors,
     },

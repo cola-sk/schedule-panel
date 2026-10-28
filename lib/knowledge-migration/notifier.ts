@@ -237,9 +237,9 @@ export function buildMigrationStatsCard(
   imageKey?: string,
   cycleStats?: CycleStatsResult,
   atAll?: boolean,
-  atZeroContributors?: boolean,
-  zeroContributorMembers?: Array<{ name: string; atTag: string }>,
-  zeroNoticeMessage?: string,
+  atIncompleteMembers?: boolean,
+  incompleteMemberList?: Array<{ name: string; atTag: string }>,
+  incompleteNoticeMessage?: string,
 ): FeishuMessagePayload {
   const effectiveCycle = cycleStats || computeCycleStats(stats, "this_week");
   const cycleLabel = effectiveCycle.cycleLabel;
@@ -390,7 +390,7 @@ export function buildMigrationStatsCard(
             content: `🏆 **累计总贡献榜：**\n${rankText}`,
           },
         },
-        ...(atZeroContributors && zeroContributorMembers && zeroContributorMembers.length > 0
+        ...(atIncompleteMembers && incompleteMemberList && incompleteMemberList.length > 0
           ? [
               {
                 tag: "hr",
@@ -399,9 +399,9 @@ export function buildMigrationStatsCard(
                 tag: "div",
                 text: {
                   tag: "lark_md",
-                  content: `📢 **个人文档迁移待跟进 (${zeroContributorMembers.length}人)：**\n${
-                    zeroNoticeMessage?.trim() || "以下同学尚未完成个人文档到知识库的迁移且当前贡献篇数为 0，请尽快完成文档归档与知识库沉淀："
-                  }\n${zeroContributorMembers.map((m) => m.atTag).join(" ")}`,
+                  content: `📢 **个人文档迁移待跟进 (${incompleteMemberList.length}人)：**\n${
+                    incompleteNoticeMessage?.trim() || "以下同学尚未完成个人文档到知识库的迁移任务，请尽快完成文档归档与知识库沉淀："
+                  }\n${incompleteMemberList.map((m) => m.atTag).join(" ")}`,
                 },
               },
             ]
@@ -432,7 +432,7 @@ export async function sendTaskStatsNotification(
   cycleTypeOverride?: StatCycleType,
   atAllOverride?: boolean,
   triggerType: "scheduled" | "manual" = "scheduled",
-  atZeroContributorsOverride?: boolean,
+  atIncompleteMembersOverride?: boolean,
 ): Promise<{ ok: boolean; message: string; stats?: TaskMigrationStats; imageKey?: string }> {
   const task = getTask(taskId);
   if (!task) throw new Error("任务不存在");
@@ -488,30 +488,45 @@ export async function sendTaskStatsNotification(
     imageKey = await uploadImage(await renderStatsDashboardImage(stats, task.name, cycleStats, directoryStats));
   }
 
-  // 3. 根据发送模式派发群 Webhook 消息
+  // 3. 计算是否 @ 提醒未完成迁移任务的人名与名单
+  const shouldAtIncomplete =
+    atIncompleteMembersOverride !== undefined
+      ? atIncompleteMembersOverride
+      : Boolean(task.notifyConfig?.atIncompleteMembers ?? task.notifyConfig?.atZeroContributors);
+
+  let incompleteMemberList: Array<{ name: string; atTag: string }> = [];
+  if (shouldAtIncomplete) {
+    try {
+      const { summary, members } = getTaskMemberContributionStatus(taskId);
+      const mode = task.notifyConfig?.atIncompleteMode || "all_incomplete";
+      const targetList =
+        mode === "zero_only"
+          ? summary.zeroContributors
+          : (summary.incompleteMembers && summary.incompleteMembers.length > 0
+              ? summary.incompleteMembers
+              : members.filter((m) => !m.completed));
+
+      incompleteMemberList = targetList.map((m) => ({
+        name: m.name,
+        atTag: m.atTag || getAtTagByName(m.name),
+      }));
+    } catch (err) {
+      console.warn("加载待催办未完成迁移成员失败:", err);
+    }
+  }
+
+  const noticeMessage =
+    task.notifyConfig?.incompleteNoticeMessage?.trim() ||
+    task.notifyConfig?.zeroNoticeMessage?.trim() ||
+    "以下同学尚未完成个人文档到知识库的迁移任务，请尽快完成文档归档与知识库沉淀：";
+
+  // 4. 根据发送模式派发群 Webhook 消息
   if (sendMode === "image_only") {
     if (!imageKey) {
       throw new Error("未能生成并获取飞书图片凭据");
     }
-    const shouldAtZero =
-      atZeroContributorsOverride !== undefined
-        ? atZeroContributorsOverride
-        : Boolean(task.notifyConfig?.atZeroContributors);
 
-    let zeroContributorMembers: Array<{ name: string; atTag: string }> = [];
-    if (shouldAtZero) {
-      try {
-        const { summary } = getTaskMemberContributionStatus(taskId);
-        zeroContributorMembers = summary.zeroContributors.map((m) => ({
-          name: m.name,
-          atTag: m.atTag || getAtTagByName(m.name),
-        }));
-      } catch (err) {
-        console.warn("加载待催办成员失败:", err);
-      }
-    }
-
-    if (atAll || (shouldAtZero && zeroContributorMembers.length > 0)) {
+    if (atAll || (shouldAtIncomplete && incompleteMemberList.length > 0)) {
       const cardElements: any[] = [];
       if (atAll) {
         cardElements.push({
@@ -533,16 +548,14 @@ export async function sendTaskStatsNotification(
         preview: true,
       });
 
-      if (shouldAtZero && zeroContributorMembers.length > 0) {
+      if (shouldAtIncomplete && incompleteMemberList.length > 0) {
         cardElements.push(
           { tag: "hr" },
           {
             tag: "div",
             text: {
               tag: "lark_md",
-              content: `📢 **个人文档迁移待跟进 (${zeroContributorMembers.length}人)：**\n${
-                task.notifyConfig?.zeroNoticeMessage?.trim() || "以下同学尚未完成个人文档到知识库的迁移且当前贡献篇数为 0，请尽快完成文档归档与知识库沉淀："
-              }\n${zeroContributorMembers.map((m) => m.atTag).join(" ")}`,
+              content: `📢 **个人文档迁移待跟进 (${incompleteMemberList.length}人)：**\n${noticeMessage}\n${incompleteMemberList.map((m) => m.atTag).join(" ")}`,
             },
           },
         );
@@ -573,24 +586,6 @@ export async function sendTaskStatsNotification(
       });
     }
   } else {
-    const shouldAtZero =
-      atZeroContributorsOverride !== undefined
-        ? atZeroContributorsOverride
-        : Boolean(task.notifyConfig?.atZeroContributors);
-
-    let zeroContributorMembers: Array<{ name: string; atTag: string }> = [];
-    if (shouldAtZero) {
-      try {
-        const { summary } = getTaskMemberContributionStatus(taskId);
-        zeroContributorMembers = summary.zeroContributors.map((m) => ({
-          name: m.name,
-          atTag: m.atTag || getAtTagByName(m.name),
-        }));
-      } catch (err) {
-        console.warn("加载待催办成员失败:", err);
-      }
-    }
-
     const cardPayload = buildMigrationStatsCard(
       stats,
       task.name,
@@ -599,9 +594,9 @@ export async function sendTaskStatsNotification(
       imageKey,
       cycleStats,
       atAll,
-      shouldAtZero,
-      zeroContributorMembers,
-      task.notifyConfig?.zeroNoticeMessage,
+      shouldAtIncomplete,
+      incompleteMemberList,
+      noticeMessage,
     );
     await sendWebhookMessage(targetWebhook, cardPayload);
   }

@@ -28,6 +28,7 @@ export async function POST(
     ...(body.name !== undefined ? { name: String(body.name).trim() } : {}),
     ...(body.botId !== undefined ? { botId: String(body.botId).trim() } : {}),
     ...(body.documentId !== undefined ? { documentId: String(body.documentId).trim() } : {}),
+    ...(body.meetingDocumentUrl !== undefined ? { meetingDocumentUrl: String(body.meetingDocumentUrl).trim() } : {}),
     ...(body.sourceDocumentId !== undefined ? { sourceDocumentId: String(body.sourceDocumentId).trim() } : {}),
     ...(body.targetFolderId !== undefined ? { targetFolderId: String(body.targetFolderId).trim() } : {}),
     ...(body.atAll !== undefined ? { atAll: Boolean(body.atAll) } : {}),

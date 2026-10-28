@@ -17,8 +17,6 @@ export async function POST(request: Request) {
   const schedule = targetScheduleId ? schedules.find((s) => s.id === targetScheduleId) : schedules[0];
   if (!schedule) return NextResponse.json({ error: "未找到定时任务" }, { status: 404 });
 
-  if (!schedule.documentId) return NextResponse.json({ error: "未配置飞书数据源链接 (FEISHU_DOCUMENT_ID)" }, { status: 400 });
-
   try {
     const rotation = await syncScheduleRotation(schedule.id);
     return NextResponse.json({

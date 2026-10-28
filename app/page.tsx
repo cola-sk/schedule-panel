@@ -38,6 +38,9 @@ import { AppSidebar } from "@/components/app-sidebar";
 import type { PublicBotConfig, ReminderSchedule, ReminderTask } from "@/lib/types";
 import { computeWeekPeriodInfo } from "@/lib/bots/weekly-report/period";
 
+const DEFAULT_MEETING_DOCUMENT_URL =
+  "https://segway-ninebot.feishu.cn/wiki/G0vTwWW0giLXfukeROWc7kfmntb";
+
 type KnowledgeTaskSummary = {
   id: string;
   name: string;
@@ -293,6 +296,8 @@ export default function DashboardPage() {
     if (name !== null) payload.name = String(name).trim();
     const documentId = form.get("documentId");
     if (documentId !== null) payload.documentId = String(documentId).trim();
+    const meetingDocumentUrl = form.get("meetingDocumentUrl");
+    if (meetingDocumentUrl !== null) payload.meetingDocumentUrl = String(meetingDocumentUrl).trim();
     const sourceDocumentId = form.get("sourceDocumentId");
     if (sourceDocumentId !== null) payload.sourceDocumentId = String(sourceDocumentId).trim();
     const targetFolderId = form.get("targetFolderId");
@@ -332,6 +337,7 @@ export default function DashboardPage() {
           body: JSON.stringify({
             name: mergedSchedule.name,
             documentId: mergedSchedule.documentId,
+            meetingDocumentUrl: mergedSchedule.meetingDocumentUrl,
             sourceDocumentId: mergedSchedule.sourceDocumentId,
             targetFolderId: mergedSchedule.targetFolderId,
             botId: mergedSchedule.botId,
@@ -414,6 +420,8 @@ export default function DashboardPage() {
     if (name) payload.name = String(name).trim();
     const documentId = form.get("documentId");
     if (documentId !== null) payload.documentId = String(documentId).trim();
+    const meetingDocumentUrl = form.get("meetingDocumentUrl");
+    if (meetingDocumentUrl !== null) payload.meetingDocumentUrl = String(meetingDocumentUrl).trim();
     const sourceDocumentId = form.get("sourceDocumentId");
     if (sourceDocumentId !== null) payload.sourceDocumentId = String(sourceDocumentId).trim();
     const targetFolderId = form.get("targetFolderId");
@@ -736,7 +744,7 @@ export default function DashboardPage() {
                                   {isWeeklyReport ? (
                                     `${weekdays[schedule.dayOfWeek]} ${schedule.time} · 机器人：${schedule.botId ? botName(schedule.botId) : "未指定机器人"} · 归档目标：${schedule.targetFolderId ? "已配置" : "待配置"} · 模板源：${schedule.sourceDocumentId ? "已配置" : "待配置"}`
                                   ) : (
-                                    `${weekdays[schedule.dayOfWeek]} ${schedule.time} · 机器人：${botName(schedule.botId)} · 当前 ${schedule.rotation.length} 人轮值`
+                                    `${weekdays[schedule.dayOfWeek]} ${schedule.time} · 机器人：${botName(schedule.botId)} · 当前 ${schedule.rotation.length} 人轮值 · 技术文档：${schedule.meetingDocumentUrl || DEFAULT_MEETING_DOCUMENT_URL}`
                                   )}
                                 </p>
                               </div>
@@ -1093,13 +1101,14 @@ export default function DashboardPage() {
                       </select>
                     </label>
                     <label className="grid gap-2 font-medium sm:col-span-2">
-                      <span>飞书名单数据源地址（文档 / 表格 / 维表 URL）</span>
+                      <span>技术周会文档地址（发送提醒附带的文档链接）</span>
                       <input
                         className={inputControlClass}
-                        name="documentId"
+                        name="meetingDocumentUrl"
                         type="url"
-                        placeholder="https://xxx.feishu.cn/wiki/... 或 docx/bitable/sheet 链接"
-                        defaultValue={editingSchedule.documentId || ""}
+                        placeholder="https://xxx.feishu.cn/wiki/... 技术周会文档链接"
+                        defaultValue={editingSchedule.meetingDocumentUrl || DEFAULT_MEETING_DOCUMENT_URL}
+                        required
                       />
                     </label>
                     <label className="flex items-center gap-2.5 pt-2 sm:col-span-2 text-sm font-normal select-none">
@@ -1124,9 +1133,17 @@ export default function DashboardPage() {
                   </div>
                 )}
                 <p className="mt-4 text-xs leading-5 text-muted-foreground">
-                  {editingSchedule.type === "weekly_report" || editingSchedule.id.includes("weekly-report")
-                    ? "周报规则：每次执行自动拉取源模板内容，并在目标知识库按 年份工作汇总/月份/周报 目录结构自动归档。"
-                    : "轮值来源：飞书文档/表格。点击“同步飞书名单”后自动刷新最新人员排期。"}
+                  {editingSchedule.type === "weekly_report" || editingSchedule.id.includes("weekly-report") ? (
+                    "周报规则：每次执行自动拉取源模板内容，并在目标知识库按 年份工作汇总/月份/周报 目录结构自动归档。"
+                  ) : (
+                    <>
+                      轮值人员复用系统通用飞书联系人文档（点击详情页「同步飞书名单」即可刷新排期，如需修改名单源请前往{" "}
+                      <Link href="/settings?tab=roster" className="text-foreground underline underline-offset-2 hover:opacity-80">
+                        系统设置 - 飞书名单管理
+                      </Link>
+                      ）。
+                    </>
+                  )}
                 </p>
                 <div className="mt-6 flex flex-wrap items-center justify-between gap-2.5 border-t border-border pt-4">
                   <Button
@@ -1371,11 +1388,25 @@ function TaskDetailView({
                 {schedule.enabled ? "启用中" : "已停用"}
               </Badge>
             </div>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              执行周期：<span className="font-medium text-foreground">{weekdays[schedule.dayOfWeek]} {schedule.time}</span> · 
-              绑定机器人：<span className="font-medium text-foreground">{botName}</span> · 
-              时区：{schedule.timezone}
-            </p>
+            <div className="mt-3 space-y-1.5 text-xs text-muted-foreground">
+              <p>
+                执行周期：<span className="font-medium text-foreground">{weekdays[schedule.dayOfWeek]} {schedule.time}</span> · 
+                绑定机器人：<span className="font-medium text-foreground">{botName}</span> · 
+                时区：{schedule.timezone}
+              </p>
+              <p className="break-all">
+                技术周会文档地址：
+                <a
+                  href={schedule.meetingDocumentUrl || DEFAULT_MEETING_DOCUMENT_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="font-medium text-foreground hover:underline inline-flex items-center gap-1"
+                >
+                  <span>{schedule.meetingDocumentUrl || DEFAULT_MEETING_DOCUMENT_URL}</span>
+                  <ExternalLink className="size-3 shrink-0" />
+                </a>
+              </p>
+            </div>
           </div>
           <div className="flex items-center gap-4 border-t sm:border-t-0 sm:border-l border-border pt-3 sm:pt-0 sm:pl-6 text-xs text-muted-foreground">
             <div>

@@ -41,12 +41,14 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
     total: number;
     completed: number;
     incomplete: number;
+    incompleteMembers: MemberContributionMigrationItem[];
     zeroContributorsAndIncomplete: number;
     zeroContributors: MemberContributionMigrationItem[];
   }>({
     total: 0,
     completed: 0,
     incomplete: 0,
+    incompleteMembers: [],
     zeroContributorsAndIncomplete: 0,
     zeroContributors: [],
   });
@@ -87,6 +89,7 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
           total: 0,
           completed: 0,
           incomplete: 0,
+          incompleteMembers: [],
           zeroContributorsAndIncomplete: 0,
           zeroContributors: [],
         },
@@ -124,13 +127,14 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
     }
   }
 
-  async function handleToggleAtZero(enabled: boolean) {
+  async function handleToggleAtIncomplete(enabled: boolean) {
     setSavingConfig(true);
     try {
       const res = await fetch(`/api/knowledge-migrations/tasks/${taskId}/member-status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          atIncompleteMembers: enabled,
           atZeroContributors: enabled,
         }),
       });
@@ -141,8 +145,33 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
       setNotice({
         type: "success",
         text: enabled
-          ? "已开启「推送时 @ 0贡献且未完成迁移员工」，系统将在定时或手动推送时精准提醒这些同学。"
-          : "已关闭「推送时 @ 0贡献员工」。",
+          ? "已开启「推送时 @ 提醒未完成迁移任务的人名」，系统将在定时或手动推送时精准提醒这些同学。"
+          : "已关闭「推送时 @ 提醒未完成迁移任务的人名」。",
+      });
+    } catch (err: any) {
+      setNotice({ type: "error", text: err.message || "更新配置失败" });
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function handleUpdateIncompleteMode(mode: "all_incomplete" | "zero_only") {
+    setSavingConfig(true);
+    try {
+      const res = await fetch(`/api/knowledge-migrations/tasks/${taskId}/member-status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          atIncompleteMode: mode,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "更新配置失败");
+
+      setNotifyConfig(data.notifyConfig);
+      setNotice({
+        type: "success",
+        text: mode === "zero_only" ? "催办范围已更新为：仅未完成且贡献为 0 的员工" : "催办范围已更新为：所有未完成迁移任务的成员",
       });
     } catch (err: any) {
       setNotice({ type: "error", text: err.message || "更新配置失败" });
@@ -229,10 +258,15 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
     setSendingTest(true);
     setNotice(null);
     try {
+      const isZeroOnly = notifyConfig?.atIncompleteMode === "zero_only";
+      const targetCount = isZeroOnly
+        ? summary.zeroContributorsAndIncomplete
+        : summary.incomplete;
       const res = await fetch(`/api/knowledge-migrations/tasks/${taskId}/notify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          atIncompleteMembers: true,
           atZeroContributors: true,
         }),
       });
@@ -241,7 +275,7 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
 
       setNotice({
         type: "success",
-        text: `✅ 已成功向飞书群发送催办测试卡片！已在卡片中精准 @ 了 ${summary.zeroContributorsAndIncomplete} 位零贡献待迁移同学。`,
+        text: `✅ 已成功向飞书群发送催办测试卡片！已在卡片中精准 @ 了 ${targetCount} 位未完成迁移任务的同学。`,
       });
     } catch (err: any) {
       setNotice({ type: "error", text: err.message || "发送催办测试卡片失败，请检查机器人 Webhook" });
@@ -257,10 +291,16 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
     setTimeout(() => setCopiedKey(null), 1800);
   }
 
-  function copyAllZeroAtTags() {
-    if (summary.zeroContributors.length === 0) return;
-    const allTags = summary.zeroContributors.map((m) => m.atTag).join(" ");
-    copyText(allTags, "all-zero-tags");
+  function copyAllIncompleteAtTags() {
+    const list =
+      notifyConfig?.atIncompleteMode === "zero_only"
+        ? summary.zeroContributors
+        : (summary.incompleteMembers && summary.incompleteMembers.length > 0
+            ? summary.incompleteMembers
+            : members.filter((m: MemberContributionMigrationItem) => !m.completed));
+    if (list.length === 0) return;
+    const allTags = list.map((m) => m.atTag).join(" ");
+    copyText(allTags, "all-incomplete-tags");
   }
 
   // 过滤后的成员列表
@@ -425,83 +465,124 @@ export function KnowledgeMigrationPersonalPanel({ taskId, taskName }: KnowledgeM
       </div>
 
       {/* 核心控制卡片：群定时推送 @ 催办开关与一键测试 */}
-      <Card className="border-amber-200 dark:border-amber-900/60 bg-gradient-to-r from-amber-50/40 via-card to-card shadow-xs">
-        <CardHeader className="pb-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2">
-              <span className="grid size-7 place-items-center rounded-lg bg-amber-500 text-white shadow-xs">
-                <AtSign className="size-4" />
-              </span>
-              <div>
-                <CardTitle className="text-sm font-semibold">
-                  群推送时 @ 未完成迁移且贡献为 0 的员工
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  定时发送周度贡献榜时，自动在卡片底部附带待催办名单并精准 @ 对应成员。
-                </CardDescription>
-              </div>
-            </div>
+      {(() => {
+        const isAtIncompleteEnabled = Boolean(notifyConfig?.atIncompleteMembers ?? notifyConfig?.atZeroContributors);
+        const mode = notifyConfig?.atIncompleteMode || "all_incomplete";
+        const currentPendingList =
+          mode === "zero_only"
+            ? summary.zeroContributors
+            : (summary.incompleteMembers && summary.incompleteMembers.length > 0
+                ? summary.incompleteMembers
+                : members.filter((m: MemberContributionMigrationItem) => !m.completed));
 
-            <div className="flex items-center gap-3">
-              <label className="relative inline-flex items-center cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={Boolean(notifyConfig?.atZeroContributors)}
-                  disabled={savingConfig}
-                  onChange={(e) => handleToggleAtZero(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-amber-600"></div>
-                <span className="ml-2 text-xs font-semibold text-foreground">
-                  {notifyConfig?.atZeroContributors ? "已开启 @ 催办" : "已停用"}
-                </span>
-              </label>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-3 pt-0">
-          <div className="rounded-lg border border-amber-200/70 bg-amber-50/60 dark:border-amber-900/40 dark:bg-amber-950/20 p-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div className="space-y-0.5">
-              <div className="font-semibold flex items-center gap-1.5">
-                <span>当前识别到待 @ 催办人员名单（{summary.zeroContributorsAndIncomplete}人）：</span>
-              </div>
-              <p className="font-mono text-[11px] text-amber-800 dark:text-amber-300 select-all">
-                {summary.zeroContributors.length > 0
-                  ? summary.zeroContributors.map((m) => m.name).join("、")
-                  : "🎉 全员均已完成迁移或已有文档贡献！"}
-              </p>
-            </div>
+        return (
+          <Card className="border-amber-200 dark:border-amber-900/60 bg-gradient-to-r from-amber-50/40 via-card to-card shadow-xs">
+            <CardHeader className="pb-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="grid size-7 place-items-center rounded-lg bg-amber-500 text-white shadow-xs">
+                    <AtSign className="size-4" />
+                  </span>
+                  <div>
+                    <CardTitle className="text-sm font-semibold">
+                      群推送时 @ 提醒未完成迁移任务的人名
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      定时或手动推送知识库统计时，自动在卡片底部附带未完成迁移任务的成员名单并精准 @ 对应同学。
+                    </CardDescription>
+                  </div>
+                </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={copyAllZeroAtTags}
-                disabled={summary.zeroContributors.length === 0}
-                className="h-7 text-xs gap-1 border-amber-300 hover:bg-amber-100/70 dark:border-amber-800"
-              >
-                {copiedKey === "all-zero-tags" ? (
-                  <Check className="size-3 text-emerald-600" />
-                ) : (
-                  <Copy className="size-3" />
-                )}
-                <span>一键复制待催办 @ 标签</span>
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={handleSendTestNotify}
-                disabled={sendingTest}
-                className="h-7 text-xs gap-1 bg-amber-600 hover:bg-amber-700 text-white"
-              >
-                {sendingTest ? <Loader2 className="size-3 animate-spin" /> : <Send className="size-3" />}
-                <span>发送一次催办测试</span>
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+                <div className="flex items-center gap-3">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isAtIncompleteEnabled}
+                      disabled={savingConfig}
+                      onChange={(e) => handleToggleAtIncomplete(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-amber-600"></div>
+                    <span className="ml-2 text-xs font-semibold text-foreground">
+                      {isAtIncompleteEnabled ? "已开启 @ 提醒" : "已停用"}
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3 pt-0">
+              {isAtIncompleteEnabled && (
+                <div className="flex items-center gap-4 text-xs text-foreground py-1 border-b border-amber-200/50 dark:border-amber-900/40">
+                  <span className="text-muted-foreground text-[11px]">提醒人员范围：</span>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="panelAtIncompleteMode"
+                      checked={mode !== "zero_only"}
+                      disabled={savingConfig}
+                      onChange={() => handleUpdateIncompleteMode("all_incomplete")}
+                      className="size-3.5 text-amber-600 focus:ring-amber-500"
+                    />
+                    <span>全部未完成成员 ({summary.incomplete}人)</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="panelAtIncompleteMode"
+                      checked={mode === "zero_only"}
+                      disabled={savingConfig}
+                      onChange={() => handleUpdateIncompleteMode("zero_only")}
+                      className="size-3.5 text-amber-600 focus:ring-amber-500"
+                    />
+                    <span>仅未完成且0贡献 ({summary.zeroContributorsAndIncomplete}人)</span>
+                  </label>
+                </div>
+              )}
+
+              <div className="rounded-lg border border-amber-200/70 bg-amber-50/60 dark:border-amber-900/40 dark:bg-amber-950/20 p-3 text-xs text-amber-900 dark:text-amber-200 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-0.5">
+                  <div className="font-semibold flex items-center gap-1.5">
+                    <span>当前识别到待 @ 催办人员名单（{currentPendingList.length}人）：</span>
+                  </div>
+                  <p className="font-mono text-[11px] text-amber-800 dark:text-amber-300 select-all">
+                    {currentPendingList.length > 0
+                      ? currentPendingList.map((m) => m.name).join("、")
+                      : "🎉 全员均已完成个人文档迁移！"}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyAllIncompleteAtTags}
+                    disabled={currentPendingList.length === 0}
+                    className="h-7 text-xs gap-1 border-amber-300 hover:bg-amber-100/70 dark:border-amber-800"
+                  >
+                    {copiedKey === "all-incomplete-tags" ? (
+                      <Check className="size-3 text-emerald-600" />
+                    ) : (
+                      <Copy className="size-3" />
+                    )}
+                    <span>一键复制待催办 @ 标签</span>
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleSendTestNotify}
+                    disabled={sendingTest}
+                    className="h-7 text-xs gap-1 bg-amber-600 hover:bg-amber-700 text-white"
+                  >
+                    {sendingTest ? <Loader2 className="size-3 animate-spin" /> : <Send className="size-3" />}
+                    <span>发送一次催办测试</span>
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* 成员配置与统计明细列表 */}
       <Card className="shadow-xs border-border">

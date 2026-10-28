@@ -14,6 +14,7 @@ export interface BotJsonConfigFile {
     id?: string;
     name: string;
     documentId?: string;
+    meetingDocumentUrl?: string;
     dayOfWeek: number;
     time: string;
     timezone?: string;

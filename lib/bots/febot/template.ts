@@ -2,16 +2,16 @@ import { FeishuMessagePayload } from "../../core/types";
 import { getDocumentInfo } from "../../mcp/feishu-doc-engine";
 import { MessageContext } from "../types";
 
-const UPDATED_DOCUMENT_URL =
+export const DEFAULT_MEETING_DOCUMENT_URL =
   "https://segway-ninebot.feishu.cn/wiki/G0vTwWW0giLXfukeROWc7kfmntb";
 
-async function getDocumentDisplayName(): Promise<string> {
+async function getDocumentDisplayName(documentUrl: string): Promise<string> {
   try {
-    const documentInfo = await getDocumentInfo(UPDATED_DOCUMENT_URL);
-    return documentInfo.title?.trim() || UPDATED_DOCUMENT_URL;
+    const documentInfo = await getDocumentInfo(documentUrl);
+    return documentInfo.title?.trim() || documentUrl;
   } catch (error) {
     console.warn("读取技术周会文档标题失败，将使用文档地址作为链接文本:", error);
-    return UPDATED_DOCUMENT_URL;
+    return documentUrl;
   }
 }
 
@@ -20,7 +20,8 @@ async function getDocumentDisplayName(): Promise<string> {
  */
 export async function buildWeeklyMeetingReminder(context: MessageContext): Promise<FeishuMessagePayload> {
   const { host, schedule } = context;
-  const documentDisplayName = await getDocumentDisplayName();
+  const documentUrl = schedule?.meetingDocumentUrl?.trim() || DEFAULT_MEETING_DOCUMENT_URL;
+  const documentDisplayName = await getDocumentDisplayName(documentUrl);
   const atAllPrefix = schedule?.atAll ? "<at id=all></at>\n" : "";
   const hostAtText = host.openId
     ? `<at id=${host.openId}></at>`
@@ -61,7 +62,7 @@ export async function buildWeeklyMeetingReminder(context: MessageContext): Promi
               is_short: true,
               text: {
                 tag: "lark_md",
-                content: `**会议文档：**\n[${documentDisplayName}](${UPDATED_DOCUMENT_URL})`,
+                content: `**会议文档：**\n[${documentDisplayName}](${documentUrl})`,
               },
             },
           ],
@@ -79,7 +80,7 @@ export async function buildWeeklyMeetingReminder(context: MessageContext): Promi
                 content: "👉 查看周会文档",
               },
               type: "primary",
-              url: UPDATED_DOCUMENT_URL,
+              url: documentUrl,
             },
           ],
         },

@@ -98,6 +98,7 @@ export function KnowledgeMigrationNotifyDialog({
   const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [availableBots, setAvailableBots] = useState<BotOption[]>([]);
+  const [incompleteMembersList, setIncompleteMembersList] = useState<Array<{ name: string; email?: string }>>([]);
   const [zeroContributorsList, setZeroContributorsList] = useState<Array<{ name: string; email?: string }>>([]);
   const [showAdvancedWebhook, setShowAdvancedWebhook] = useState(false);
 
@@ -110,6 +111,8 @@ export function KnowledgeMigrationNotifyDialog({
     time: "18:00",
     cycleType: "this_week",
     atAll: false,
+    atIncompleteMembers: false,
+    atIncompleteMode: "all_incomplete",
     atZeroContributors: false,
     silentDailyScanEnabled: true,
   });
@@ -128,6 +131,12 @@ export function KnowledgeMigrationNotifyDialog({
         const bots = Array.isArray(data?.availableBots) ? data.availableBots : [];
         setAvailableBots(bots);
 
+        if (Array.isArray(memberData?.summary?.incompleteMembers)) {
+          setIncompleteMembersList(memberData.summary.incompleteMembers);
+        } else if (Array.isArray(memberData?.members)) {
+          setIncompleteMembersList(memberData.members.filter((m: any) => !m.completed));
+        }
+
         if (Array.isArray(memberData?.summary?.zeroContributors)) {
           setZeroContributorsList(memberData.summary.zeroContributors);
         }
@@ -138,11 +147,15 @@ export function KnowledgeMigrationNotifyDialog({
           if (!loadedConfig.botId && bots.length > 0) {
             loadedConfig.botId = bots[0].id;
           }
+          const isAtIncomplete = Boolean(loadedConfig.atIncompleteMembers ?? loadedConfig.atZeroContributors);
           setConfig({
             ...loadedConfig,
             cycleType: loadedConfig.cycleType || "this_week",
             atAll: Boolean(loadedConfig.atAll),
-            atZeroContributors: Boolean(loadedConfig.atZeroContributors),
+            atIncompleteMembers: isAtIncomplete,
+            atZeroContributors: isAtIncomplete,
+            atIncompleteMode: loadedConfig.atIncompleteMode || "all_incomplete",
+            incompleteNoticeMessage: loadedConfig.incompleteNoticeMessage || loadedConfig.zeroNoticeMessage || "",
             silentDailyScanEnabled: loadedConfig.silentDailyScanEnabled !== false,
           });
           // 若原本配了自定义 webhookUrl 但没有对应 botId，自动展开高级设置
@@ -202,7 +215,10 @@ export function KnowledgeMigrationNotifyDialog({
           sendMode: config.sendMode || "both",
           cycleType: config.frequency === "daily" ? "yesterday" : config.cycleType || "this_week",
           atAll: Boolean(config.atAll),
-          atZeroContributors: Boolean(config.atZeroContributors),
+          atIncompleteMembers: Boolean(config.atIncompleteMembers ?? config.atZeroContributors),
+          atZeroContributors: Boolean(config.atIncompleteMembers ?? config.atZeroContributors),
+          atIncompleteMode: config.atIncompleteMode || "all_incomplete",
+          incompleteNoticeMessage: config.incompleteNoticeMessage || config.zeroNoticeMessage || undefined,
         }),
       });
       const data = await res.json();
@@ -503,38 +519,105 @@ export function KnowledgeMigrationNotifyDialog({
                 />
               </div>
 
-              {/* 发送时 @ 未完成迁移且贡献为0的员工 开关 */}
-              <div className="flex items-start justify-between rounded-xl border border-amber-200/80 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/20 p-3.5">
-                <div className="space-y-1 pr-3">
-                  <div className="font-medium text-foreground flex items-center gap-1.5">
-                    <AtSign className="size-3.5 text-amber-600 dark:text-amber-400" />
-                    <span>催办：@ 未完成个人迁移且贡献为 0 的员工</span>
-                    {config.atZeroContributors ? (
-                      <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px]">
-                        已开启 ({zeroContributorsList.length}人)
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-muted-foreground text-[10px]">
-                        未开启
-                      </Badge>
+              {/* 发送时 @ 提醒未完成迁移任务的人名 开关 */}
+              {(() => {
+                const isAtIncompleteEnabled = Boolean(config.atIncompleteMembers ?? config.atZeroContributors);
+                const targetIncompleteList =
+                  config.atIncompleteMode === "zero_only" ? zeroContributorsList : incompleteMembersList;
+
+                return (
+                  <div className="space-y-3 rounded-xl border border-amber-200/80 bg-amber-50/40 dark:border-amber-900/40 dark:bg-amber-950/20 p-3.5">
+                    <div className="flex items-start justify-between">
+                      <div className="space-y-1 pr-3">
+                        <div className="font-medium text-foreground flex items-center gap-1.5 flex-wrap">
+                          <AtSign className="size-3.5 text-amber-600 dark:text-amber-400" />
+                          <span>催办：@ 提醒未完成迁移任务的人名</span>
+                          {isAtIncompleteEnabled ? (
+                            <Badge variant="outline" className="bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/30 text-[10px]">
+                              已开启 ({targetIncompleteList.length}人)
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="text-muted-foreground text-[10px]">
+                              未开启
+                            </Badge>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          推送知识库统计时，自动提取尚未标记完成个人迁移任务的同学并精准 @ 对应人名进行提醒。
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={isAtIncompleteEnabled}
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          setConfig({
+                            ...config,
+                            atIncompleteMembers: checked,
+                            atZeroContributors: checked,
+                          });
+                        }}
+                        className="size-5 rounded border-gray-300 text-amber-600 focus:ring-amber-500 cursor-pointer mt-0.5"
+                      />
+                    </div>
+
+                    {isAtIncompleteEnabled && (
+                      <div className="space-y-2.5 pt-2 border-t border-amber-200/60 dark:border-amber-900/40">
+                        <div className="flex items-center gap-4 text-xs text-foreground flex-wrap">
+                          <span className="text-muted-foreground text-[11px]">提醒人员范围：</span>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="atIncompleteMode"
+                              checked={config.atIncompleteMode !== "zero_only"}
+                              onChange={() => setConfig({ ...config, atIncompleteMode: "all_incomplete" })}
+                              className="size-3.5 text-amber-600 focus:ring-amber-500"
+                            />
+                            <span>全部未完成成员 ({incompleteMembersList.length}人)</span>
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="radio"
+                              name="atIncompleteMode"
+                              checked={config.atIncompleteMode === "zero_only"}
+                              onChange={() => setConfig({ ...config, atIncompleteMode: "zero_only" })}
+                              className="size-3.5 text-amber-600 focus:ring-amber-500"
+                            />
+                            <span>仅未完成且0贡献 ({zeroContributorsList.length}人)</span>
+                          </label>
+                        </div>
+
+                        {targetIncompleteList.length > 0 ? (
+                          <div className="rounded bg-amber-100/70 dark:bg-amber-900/40 px-2.5 py-1.5 text-[11px] text-amber-900 dark:text-amber-200 font-mono">
+                            待催办名单 ({targetIncompleteList.length}人)：{targetIncompleteList.map((m) => m.name).join("、")}
+                          </div>
+                        ) : (
+                          <div className="rounded bg-green-500/10 px-2.5 py-1.5 text-[11px] text-green-700 dark:text-green-300">
+                            🎉 所选范围内的所有同学均已完成迁移任务！
+                          </div>
+                        )}
+
+                        <div className="space-y-1">
+                          <label className="text-[11px] text-muted-foreground">自定义催办提醒文案（选填）：</label>
+                          <input
+                            type="text"
+                            value={config.incompleteNoticeMessage || config.zeroNoticeMessage || ""}
+                            onChange={(e) =>
+                              setConfig({
+                                ...config,
+                                incompleteNoticeMessage: e.target.value,
+                                zeroNoticeMessage: e.target.value,
+                              })
+                            }
+                            placeholder="以下同学尚未完成个人文档到知识库的迁移任务，请尽快完成文档归档与知识库沉淀："
+                            className="w-full rounded-md border border-amber-300/60 dark:border-amber-800/60 bg-white/70 dark:bg-black/20 px-2.5 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-amber-500 text-foreground"
+                          />
+                        </div>
+                      </div>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    结合飞书名单与知识库统计，群通知时精准 @ 尚未完成个人文档迁移且贡献篇数为 0 的同学进行催办提醒。
-                  </p>
-                  {zeroContributorsList.length > 0 && (
-                    <div className="rounded bg-amber-100/70 dark:bg-amber-900/40 px-2 py-1 text-[11px] text-amber-900 dark:text-amber-200 font-mono">
-                      待催办名单 ({zeroContributorsList.length}人)：{zeroContributorsList.map((m) => m.name).join("、")}
-                    </div>
-                  )}
-                </div>
-                <input
-                  type="checkbox"
-                  checked={Boolean(config.atZeroContributors)}
-                  onChange={(e) => setConfig({ ...config, atZeroContributors: e.target.checked })}
-                  className="size-5 rounded border-gray-300 text-amber-600 focus:ring-amber-500 cursor-pointer mt-0.5"
-                />
-              </div>
+                );
+              })()}
 
               {/* 上次发送记录 */}
               <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs flex items-center justify-between text-muted-foreground">

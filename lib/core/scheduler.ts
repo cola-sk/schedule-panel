@@ -1,4 +1,5 @@
 import { getBotDefinition } from "../bots/index";
+import { syncRoster } from "../roster/service";
 import { getChineseHolidayDates } from "./holidays";
 import { fetchRotationFromSource, sendWebhookMessage } from "./feishu-client";
 import {
@@ -486,21 +487,17 @@ export async function dispatchDueTasks(): Promise<Array<{ id: string; status: "s
 }
 
 /**
- * 同步指定 Schedule 绑定的飞书名单
+ * 同步指定 Schedule 绑定的飞书名单（统一使用系统设置中的通用飞书联系人文档）
  */
 export async function syncScheduleRotation(scheduleId: string): Promise<RotationMember[]> {
   const schedule = getSchedule(scheduleId);
   if (!schedule) throw new Error(`未找到定时任务: ${scheduleId}`);
-  if (!schedule.documentId) throw new Error("未配置飞书数据源地址（FEISHU_DOCUMENT_ID）");
 
-  const botDef = getBotDefinition(schedule.botId);
-  let rotation: RotationMember[];
-
-  if (botDef?.customFetchRotation) {
-    rotation = await botDef.customFetchRotation(schedule.documentId);
-  } else {
-    rotation = await fetchRotationFromSource(schedule.documentId);
-  }
+  const rosterResult = await syncRoster();
+  const rotation: RotationMember[] = rosterResult.members.map((m) => ({
+    name: m.name,
+    ...(m.openId ? { openId: m.openId } : {}),
+  }));
 
   // 同步新名单时，尽量保持当前值班人姓名对应的索引
   const currentHostName = schedule.rotation[schedule.currentIndex]?.name;

@@ -1,6 +1,6 @@
 import { loadBotConfigById } from "../../core/config-loader";
 import { BotDefinition } from "../types";
-import { buildWeeklyMeetingReminder } from "./template";
+import { buildWeeklyMeetingReminder, DEFAULT_MEETING_DOCUMENT_URL } from "./template";
 
 const loadedConfig = loadBotConfigById("febot");
 
@@ -14,6 +14,7 @@ export const febot: BotDefinition = {
         name: loadedConfig.schedule.name,
         dayOfWeek: loadedConfig.schedule.dayOfWeek,
         time: loadedConfig.schedule.time,
+        meetingDocumentUrl: loadedConfig.schedule.meetingDocumentUrl || DEFAULT_MEETING_DOCUMENT_URL,
         rotationStartAt: loadedConfig.schedule.rotationStartAt || "2026-09-07T10:00:00+08:00",
         initialMembers: loadedConfig.schedule.initialMembers || [],
       }
@@ -21,6 +22,7 @@ export const febot: BotDefinition = {
         name: "前端技术周会主持提醒",
         dayOfWeek: 1,
         time: "10:00",
+        meetingDocumentUrl: DEFAULT_MEETING_DOCUMENT_URL,
         rotationStartAt: "2026-09-07T10:00:00+08:00",
         initialMembers: [],
       },

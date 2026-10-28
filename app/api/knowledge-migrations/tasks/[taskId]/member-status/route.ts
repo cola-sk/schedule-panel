@@ -63,23 +63,40 @@ export async function PATCH(
       updateMemberPersonalMigrationStatus(taskId, idOrName, Boolean(body.completed), body.note);
     }
 
-    // 3. 更新 @ 0 贡献员工开关配置
-    if (body.atZeroContributors !== undefined || body.zeroNoticeMessage !== undefined) {
+    // 3. 更新 @ 催办配置
+    if (
+      body.atIncompleteMembers !== undefined ||
+      body.atZeroContributors !== undefined ||
+      body.atIncompleteMode !== undefined ||
+      body.incompleteNoticeMessage !== undefined ||
+      body.zeroNoticeMessage !== undefined
+    ) {
       const prevNotify = task.notifyConfig || {
         enabled: false,
         dayOfWeek: 5,
         time: "18:00",
       };
+      const isAtIncomplete =
+        body.atIncompleteMembers !== undefined
+          ? Boolean(body.atIncompleteMembers)
+          : body.atZeroContributors !== undefined
+          ? Boolean(body.atZeroContributors)
+          : Boolean(prevNotify.atIncompleteMembers ?? prevNotify.atZeroContributors);
+
+      const noticeMsg =
+        body.incompleteNoticeMessage !== undefined
+          ? body.incompleteNoticeMessage
+          : body.zeroNoticeMessage !== undefined
+          ? body.zeroNoticeMessage
+          : (prevNotify.incompleteNoticeMessage || prevNotify.zeroNoticeMessage);
+
       saveTaskNotifyConfig(taskId, {
         ...prevNotify,
-        atZeroContributors:
-          body.atZeroContributors !== undefined
-            ? Boolean(body.atZeroContributors)
-            : prevNotify.atZeroContributors,
-        zeroNoticeMessage:
-          body.zeroNoticeMessage !== undefined
-            ? body.zeroNoticeMessage
-            : prevNotify.zeroNoticeMessage,
+        atIncompleteMembers: isAtIncomplete,
+        atZeroContributors: isAtIncomplete,
+        atIncompleteMode: body.atIncompleteMode || prevNotify.atIncompleteMode || "all_incomplete",
+        incompleteNoticeMessage: noticeMsg,
+        zeroNoticeMessage: noticeMsg,
       });
     }
 
